@@ -1,0 +1,297 @@
+.class public final Lcom/appsflyer/internal/AFe1tSDK$AFa1uSDK;
+.super Lcom/appsflyer/internal/AFe1tSDK;
+.source "r8-map-id-ec98ff4bac66e36178fd49edbfc100dedc956143d6f6b6d9cbfc70524c50faf8"
+
+
+# annotations
+.annotation system Ldalvik/annotation/EnclosingClass;
+    value = Lcom/appsflyer/internal/AFe1tSDK;
+.end annotation
+
+.annotation system Ldalvik/annotation/InnerClass;
+    accessFlags = 0x19
+    name = "AFa1uSDK"
+.end annotation
+
+.annotation runtime Lkotlin/Metadata;
+.end annotation
+
+
+# static fields
+.field public static final INSTANCE:Lcom/appsflyer/internal/AFe1tSDK$AFa1uSDK;
+    .annotation build Lorg/jetbrains/annotations/NotNull;
+    .end annotation
+.end field
+
+.field private static a:Ljava/lang/String;
+
+
+# direct methods
+.method static constructor <clinit>()V
+    .locals 1
+
+    .line 1
+    new-instance v0, Lcom/appsflyer/internal/AFe1tSDK$AFa1uSDK;
+
+    .line 2
+    .line 3
+    invoke-direct {v0}, Lcom/appsflyer/internal/AFe1tSDK$AFa1uSDK;-><init>()V
+
+    .line 4
+    .line 5
+    .line 6
+    sput-object v0, Lcom/appsflyer/internal/AFe1tSDK$AFa1uSDK;->INSTANCE:Lcom/appsflyer/internal/AFe1tSDK$AFa1uSDK;
+
+    .line 7
+    .line 8
+    return-void
+.end method
+
+.method private constructor <init>()V
+    .locals 4
+
+    .line 1
+    sget-object v1, Lcom/appsflyer/internal/AFe1tSDK$AFa1uSDK;->a:Ljava/lang/String;
+
+    if-nez v1, :cond_0
+
+    const/16 v1, 0x12
+
+    new-array v0, v1, [C
+
+    const/16 v2, -0x3485
+
+    xor-int/lit16 v2, v2, -0x34f2
+
+    int-to-char v2, v2
+
+    const v1, 0x10
+
+    aput-char v2, v0, v1
+
+    const v1, 0x10
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x2a
+
+    int-to-char v2, v2
+
+    const v1, 0xa
+
+    aput-char v2, v0, v1
+
+    const v1, 0x10
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x10
+
+    int-to-char v2, v2
+
+    const v1, 0x11
+
+    aput-char v2, v0, v1
+
+    const v1, 0xa
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x0
+
+    int-to-char v2, v2
+
+    const v1, 0x2
+
+    aput-char v2, v0, v1
+
+    const v1, 0xa
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x2c
+
+    int-to-char v2, v2
+
+    const v1, 0x3
+
+    aput-char v2, v0, v1
+
+    const v1, 0x10
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x1b
+
+    int-to-char v2, v2
+
+    const v1, 0x5
+
+    aput-char v2, v0, v1
+
+    const v1, 0xa
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x3a
+
+    int-to-char v2, v2
+
+    const v1, 0xe
+
+    aput-char v2, v0, v1
+
+    const v1, 0x10
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0xd
+
+    int-to-char v2, v2
+
+    const v1, 0x9
+
+    aput-char v2, v0, v1
+
+    const v1, 0x10
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x7
+
+    int-to-char v2, v2
+
+    const v1, 0xb
+
+    aput-char v2, v0, v1
+
+    const v1, 0x3
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x12
+
+    int-to-char v2, v2
+
+    const v1, 0x4
+
+    aput-char v2, v0, v1
+
+    const v1, 0xa
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x29
+
+    int-to-char v2, v2
+
+    const v1, 0xd
+
+    aput-char v2, v0, v1
+
+    const v1, 0x10
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x14
+
+    int-to-char v2, v2
+
+    const v1, 0x0
+
+    aput-char v2, v0, v1
+
+    const v1, 0x3
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x17
+
+    int-to-char v2, v2
+
+    const v1, 0x6
+
+    aput-char v2, v0, v1
+
+    const v1, 0x11
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0xa
+
+    int-to-char v2, v2
+
+    const v1, 0x8
+
+    aput-char v2, v0, v1
+
+    const v1, 0x8
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0xd
+
+    int-to-char v2, v2
+
+    const v1, 0x7
+
+    aput-char v2, v0, v1
+
+    const v1, 0x0
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0xf
+
+    int-to-char v2, v2
+
+    const v1, 0xf
+
+    aput-char v2, v0, v1
+
+    const v1, 0x8
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0xa
+
+    int-to-char v2, v2
+
+    const v1, 0xc
+
+    aput-char v2, v0, v1
+
+    const v1, 0xa
+
+    aget-char v2, v0, v1
+
+    xor-int/lit16 v2, v2, 0x39
+
+    int-to-char v2, v2
+
+    const v1, 0x1
+
+    aput-char v2, v0, v1
+
+    new-instance v2, Ljava/lang/String;
+
+    invoke-direct {v2, v0}, Ljava/lang/String;-><init>([C)V
+
+    invoke-virtual {v2}, Ljava/lang/String;->intern()Ljava/lang/String;
+
+    move-result-object v3
+
+    sput-object v3, Lcom/appsflyer/internal/AFe1tSDK$AFa1uSDK;->a:Ljava/lang/String;
+
+    :cond_0
+    sget-object v3, Lcom/appsflyer/internal/AFe1tSDK$AFa1uSDK;->a:Ljava/lang/String;
+
+    .line 2
+    .line 3
+    invoke-direct {p0, v3}, Lcom/appsflyer/internal/AFe1tSDK;-><init>(Ljava/lang/String;)V
+
+    .line 4
+    .line 5
+    .line 6
+    return-void
+.end method
