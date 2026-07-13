@@ -8,6 +8,7 @@ import re
 import sys
 
 from . import __version__
+from .alpha_trace import alpha_trace_text, trace_literal_output
 from .detect import detect
 from .external_engines import ExternalEngineError, run_moonsec_v2_reference, run_moonsec_v3_reference, run_prometheus_static
 from .github_fetch import FetchError, FetchedSource, discover_github_urls, fetch_repository, fetch_single, parse_repo_url
@@ -23,12 +24,13 @@ from .passes import (
     normalize,
 )
 from .report import text_report
+from .updates import check_for_update, update_status_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def analyze_text(text: str, name: str) -> AnalysisResult:
+def analyze_text(text: str, name: str, alpha: bool = False) -> AnalysisResult:
     normalized, passes, strings = normalize(text)
     detections = detect(text)
     warnings: list[str] = []
@@ -46,6 +48,11 @@ def analyze_text(text: str, name: str) -> AnalysisResult:
         warnings.append(
             "Flattened VM dispatcher detected. MoonWAD wrote vm-map.txt and vm-map.json as a static navigation dump; it did not execute the source."
         )
+    if alpha:
+        alpha_trace = trace_literal_output(normalized)
+        metadata["alpha_trace"] = alpha_trace
+        if not alpha_trace.get("accepted"):
+            warnings.append("Alpha literal trace refused this source; alpha mode never executes Lua/Luau or loaders.")
     if len(text) > 5_000_000:
         warnings.append("Large source: some table extraction limits may truncate previews.")
     return AnalysisResult(
@@ -89,6 +96,10 @@ def write_result(result: AnalysisResult, out_dir: Path) -> Path:
     if isinstance(flattened_vm, dict):
         (target / "vm-map.txt").write_text(flattened_vm_map_text(flattened_vm), encoding="utf-8")
         (target / "vm-map.json").write_text(json.dumps(flattened_vm, indent=2, ensure_ascii=False), encoding="utf-8")
+    alpha_trace = result.metadata.get("alpha_trace")
+    if isinstance(alpha_trace, dict):
+        (target / "alpha-trace.txt").write_text(alpha_trace_text(alpha_trace), encoding="utf-8")
+        (target / "alpha-trace.json").write_text(json.dumps(alpha_trace, indent=2, ensure_ascii=False), encoding="utf-8")
     if result.payloads:
         payload_dir = target / "payloads"
         payload_dir.mkdir(exist_ok=True)
@@ -148,6 +159,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional pinned reference engine (MoonSec reference output is bytecode or disassembly, not invented Lua)",
     )
     parser.add_argument("--version", action="version", version=f"MoonWAD {__version__}")
+    parser.add_argument("--check-update", action="store_true", help="check the fixed MoonWAD GitHub branch for a newer version; never installs anything")
+    parser.add_argument(
+        "--alpha",
+        action="store_true",
+        help="write a literal-only alpha output trace; it refuses and never executes non-literal Lua/Luau",
+    )
     parser.add_argument("-web", "--web", action="store_true", help="start the local browser UI (127.0.0.1 only)")
     parser.add_argument("--web-port", type=int, default=8765, help="local browser UI port; use 0 for an available port")
     parser.add_argument("--no-browser", action="store_true", help="do not automatically open a browser with --web")
@@ -160,11 +177,21 @@ def main(argv: list[str] | None = None) -> int:
         argv = interactive_args()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.check_update:
+        if args.input or args.web or args.engine != "builtin":
+            parser.error("--check-update is used on its own")
+        status = check_for_update()
+        print(update_status_text(status))
+        return 1 if status.get("error") else 0
+    if args.alpha and args.engine != "builtin":
+        parser.error("--alpha only supports MoonWAD's built-in literal-only trace")
     if args.web:
         if args.input:
             parser.error("--web starts the local UI; submit the file through that UI instead")
         if not 0 <= args.web_port <= 65535:
             parser.error("--web-port must be between 0 and 65535")
+        if args.alpha:
+            parser.error("choose Alpha literal trace in the web page after starting --web")
         from .web import serve_web
 
         out_dir = Path(args.out_dir).expanduser().resolve()
@@ -181,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             fetched = collect_remote(source, args.recursive, max(1, min(args.max_files, 200)))
             manifest: list[dict[str, str]] = []
             for item in fetched:
-                result = analyze_text(item.text, item.name)
+                result = analyze_text(item.text, item.name, alpha=args.alpha)
                 result.metadata["url"] = item.url
                 target = write_result(result, out_dir)
                 manifest.append({"url": item.url, "source": item.name, "output": str(target)})
@@ -211,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"External static/reference engine output: {output_path}")
             return 0
         text = input_path.read_text(encoding="utf-8", errors="replace")
-        result = analyze_text(text, input_path.name)
+        result = analyze_text(text, input_path.name, alpha=args.alpha)
         target = write_result(result, out_dir)
         print(text_report(result))
         print(f"Output: {target}")

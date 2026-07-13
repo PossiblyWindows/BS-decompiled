@@ -8,9 +8,11 @@ import unittest
 from urllib.request import Request, urlopen
 from unittest.mock import patch
 
+from moonwad.alpha_trace import alpha_trace_text, trace_literal_output
 from moonwad.cli import analyze_text, main, write_result
 from moonwad.github_fetch import normalize_github_file_url, parse_repo_url
 from moonwad.passes import extract_flattened_vm_map, flattened_vm_map_text, normalize
+from moonwad.updates import check_for_update
 from moonwad.web import make_web_server
 
 
@@ -101,6 +103,30 @@ class MoonWADTests(unittest.TestCase):
             self.assertTrue((target / "vm-map.txt").is_file())
             self.assertTrue((target / "vm-map.json").is_file())
 
+    def test_alpha_literal_trace_never_executes(self) -> None:
+        trace = trace_literal_output('print("hello")\nwarn(string.char(33)) -- harmless')
+        self.assertTrue(trace["accepted"])
+        self.assertFalse(trace["executed"])
+        self.assertEqual(trace["outputs"], [{"kind": "print", "text": "hello"}, {"kind": "warn", "text": "!"}])
+        rejected = trace_literal_output('print(game:HttpGet("https://example.invalid"))')
+        self.assertFalse(rejected["accepted"])
+        self.assertIn("non-literal", " ".join(rejected["refusals"]))
+        self.assertIn("no Lua runtime", alpha_trace_text(trace))
+
+    def test_alpha_trace_output_files(self) -> None:
+        result = analyze_text('print("hello world")', "alpha.lua", alpha=True)
+        self.assertIn("alpha_trace", result.metadata)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = write_result(result, Path(tmp))
+            self.assertTrue((target / "alpha-trace.txt").is_file())
+            self.assertIn("hello world", (target / "alpha-trace.txt").read_text())
+
+    def test_update_checker_compares_semantic_versions_without_network(self) -> None:
+        newer = check_for_update(lambda: "99.0.0")
+        self.assertTrue(newer["update_available"])
+        equivalent = check_for_update(lambda: "0.6")
+        self.assertFalse(equivalent["update_available"])
+
     def test_output_files(self) -> None:
         result = analyze_text("print(string.char(65))", "tiny.lua")
         with tempfile.TemporaryDirectory() as tmp:
@@ -168,10 +194,44 @@ class MoonWADTests(unittest.TestCase):
                 server.server_close()
                 worker.join(timeout=2)
 
+    def test_web_alpha_trace_and_update_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "moonwad.web.check_for_update",
+            return_value={"current_version": "0.6.0", "latest_version": "0.6.0", "update_available": False, "project_url": "https://example.invalid", "error": None},
+        ):
+            server = make_web_server(Path(tmp), port=0)
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                update = json.loads(urlopen(f"{base}/api/update").read())
+                self.assertEqual(update["latest_version"], "0.6.0")
+                request = Request(
+                    f"{base}/api/analyze",
+                    data=json.dumps({"name": "alpha.lua", "text": 'print("hello")', "alpha": True}).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                item = json.loads(urlopen(request).read())["results"][0]
+                self.assertIn("alpha-trace.txt", item["files"])
+                alpha_text = urlopen(f"{base}{item['files']['alpha-trace.txt']}").read().decode()
+                self.assertIn("hello", alpha_text)
+            finally:
+                server.shutdown()
+                server.server_close()
+                worker.join(timeout=2)
+
     def test_web_cli_alias(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch("moonwad.web.serve_web", return_value=0) as serve:
             self.assertEqual(main(["-web", "--web-port", "0", "--no-browser", "-o", tmp]), 0)
             serve.assert_called_once_with(Path(tmp).resolve(), port=0, open_browser=False)
+
+    def test_cli_update_checker(self) -> None:
+        with patch(
+            "moonwad.cli.check_for_update",
+            return_value={"current_version": "0.6.0", "latest_version": "0.6.0", "update_available": False, "project_url": "https://example.invalid", "error": None},
+        ):
+            self.assertEqual(main(["--check-update"]), 0)
 
 
 if __name__ == "__main__":

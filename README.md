@@ -24,7 +24,23 @@ moonwad --web
 The server only listens on `127.0.0.1`, prints its local URL, and opens a
 browser when one is available. Use `--no-browser` to only print the link or
 `--web-port 0` to choose a free port. The GUI can analyze a local file, pasted
-source, or public GitHub/raw URL. It never executes submitted Lua/Luau.
+source, or public GitHub/raw URL. It never executes submitted Lua/Luau. Use
+the **Check for updates** button to compare the installed version with the
+fixed MoonWAD GitHub branch; it never installs anything automatically.
+
+CLI equivalent:
+
+```sh
+moonwad --check-update
+```
+
+## Alpha literal trace
+
+For tiny harmless examples such as `print("hello")`, use `--alpha` or tick
+**Alpha literal trace** in the web UI. MoonWAD writes `alpha-trace.txt` and
+`alpha-trace.json` with the provable literal output. It is intentionally not a
+Lua runtime: it rejects variables, functions, loops, loaders, HTTP, globals,
+and all non-literal calls rather than executing them.
 
 ## PC / Windows
 
@@ -90,6 +106,7 @@ Results are written under `moonwad-output/<source>/`:
 - `deobfuscated.lua` — best static recovery; the web UI displays this inline
 - `normalized.lua` — legacy-compatible copy of the same recovered output
 - `vm-map.txt` and `vm-map.json` when a flattened dispatcher is found
+- `alpha-trace.txt` and `alpha-trace.json` when Alpha literal trace is selected
 - `strings.txt`
 - `report.txt`
 - `report.json`

@@ -18,12 +18,23 @@ from urllib.parse import unquote, urlsplit
 import webbrowser
 
 from .github_fetch import FetchError
+from .updates import check_for_update
 
 
 MAX_INPUT_BYTES = 12 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_INPUT_BYTES * 2 + 128 * 1024
 MAX_GUI_REMOTE_FILES = 50
-RESULT_FILES = ("deobfuscated.lua", "normalized.lua", "vm-map.txt", "vm-map.json", "strings.txt", "report.txt", "report.json")
+RESULT_FILES = (
+    "deobfuscated.lua",
+    "normalized.lua",
+    "vm-map.txt",
+    "vm-map.json",
+    "alpha-trace.txt",
+    "alpha-trace.json",
+    "strings.txt",
+    "report.txt",
+    "report.json",
+)
 
 
 WEB_PAGE = r"""<!doctype html>
@@ -39,7 +50,7 @@ WEB_PAGE = r"""<!doctype html>
     .card { background:rgba(23,28,38,.94); border:1px solid var(--line); box-shadow:0 18px 45px rgba(0,0,0,.22); border-radius:15px; padding:20px; margin:15px 0; }
     label { display:block; font-weight:650; margin:12px 0 7px; } input[type=file], input[type=url], input[type=number], textarea { display:block; width:100%; color:inherit; background:#0f1520; border:1px solid #344055; border-radius:9px; padding:10px; font:inherit; }
     textarea { min-height:180px; resize:vertical; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:13px; } .row { display:flex; gap:16px; align-items:end; flex-wrap:wrap; } .row > * { flex:1 1 230px; } .check { display:flex; gap:8px; align-items:center; margin-top:13px; color:var(--muted); font-weight:500; }
-    button { appearance:none; border:0; border-radius:9px; padding:11px 15px; color:#07111f; background:var(--accent); font:700 15px system-ui,sans-serif; cursor:pointer; margin-top:18px; } button:disabled { cursor:wait; opacity:.62; } .hint, .safe { color:var(--muted); font-size:13px; } .safe { border-left:3px solid var(--ok); padding-left:10px; }
+    button { appearance:none; border:0; border-radius:9px; padding:11px 15px; color:#07111f; background:var(--accent); font:700 15px system-ui,sans-serif; cursor:pointer; margin-top:18px; } button:disabled { cursor:wait; opacity:.62; } button.secondary { background:#2b3a52; color:#d7e6ff; margin-left:8px; } .hint, .safe { color:var(--muted); font-size:13px; } .safe { border-left:3px solid var(--ok); padding-left:10px; }
     #status { min-height:25px; font-weight:600; } #status.error { color:#ff9696; } #status.ok { color:var(--ok); } .result { border-top:1px solid var(--line); padding:15px 0 2px; } .result:first-child { border-top:0; padding-top:0; } .pills { display:flex; flex-wrap:wrap; gap:7px; margin:8px 0; } .pill { padding:2px 8px; border:1px solid #3d4b62; border-radius:99px; color:#c5d3e6; font-size:12px; } .warn { color:var(--warn); } a { color:var(--accent); } code { color:#d7e6ff; } details { margin-top:12px; } summary { cursor:pointer; color:#d7e6ff; font-weight:650; } .code-preview { max-height:520px; overflow:auto; margin:8px 0 0; padding:12px; white-space:pre; border:1px solid #344055; border-radius:9px; background:#0b1019; color:#d7e6ff; font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
   </style>
 </head>
@@ -47,6 +58,7 @@ WEB_PAGE = r"""<!doctype html>
 <main>
   <h1>Moon<span>WAD</span></h1>
   <p class="lede">Local, static Lua/Luau analysis for common MoonSec, Prometheus, and WeAreDevs packing layers.</p>
+  <button id="check-update" class="secondary" type="button">Check for updates</button><span id="update-status" class="hint"></span>
   <section class="card">
     <p class="safe">This page is served only from your device. MoonWAD never runs the Lua/Luau you submit.</p>
     <label for="file">Choose a local Lua/Luau/text file</label>
@@ -65,6 +77,7 @@ WEB_PAGE = r"""<!doctype html>
         <label class="check"><input id="recursive" type="checkbox"> Follow GitHub links found in the loader</label>
       </div>
     </div>
+    <label class="check"><input id="alpha" type="checkbox"> Alpha literal trace: dump only direct literal <code>print</code>/<code>warn</code> output; never execute Lua</label>
     <button id="analyze">Analyze safely</button>
   </section>
   <section class="card">
@@ -74,7 +87,7 @@ WEB_PAGE = r"""<!doctype html>
 </main>
 <script>
 const byId = id => document.getElementById(id);
-const status = byId('status'); const results = byId('results'); const button = byId('analyze');
+const status = byId('status'); const results = byId('results'); const button = byId('analyze'); const updateButton=byId('check-update'); const updateStatus=byId('update-status');
 function addText(parent, tag, value, cls) { const el=document.createElement(tag); el.textContent=value; if(cls) el.className=cls; parent.appendChild(el); return el; }
 function addLink(parent, label, href) { const a=document.createElement('a'); a.textContent=label; a.href=href; a.target='_blank'; a.rel='noopener'; parent.appendChild(a); }
 async function addTextPreview(parent, label, href, open) {
@@ -87,6 +100,7 @@ async function addTextPreview(parent, label, href, open) {
 }
 function addRecoveredPreview(parent, files) {
   if(files['vm-map.txt']) void addTextPreview(parent,'Static VM map (no Lua executed)',files['vm-map.txt'],true);
+  if(files['alpha-trace.txt']) void addTextPreview(parent,'Alpha literal trace (no Lua executed)',files['alpha-trace.txt'],true);
   const recovered=files['deobfuscated.lua'] || files['normalized.lua'];
   if(recovered) void addTextPreview(parent,'Recovered static Lua (deobfuscated.lua)',recovered,true);
 }
@@ -106,7 +120,7 @@ function render(data) {
 }
 button.addEventListener('click', async () => {
   const file=byId('file').files[0]; const pasted=byId('source').value; const url=byId('url').value.trim();
-  const payload={recursive:byId('recursive').checked, max_files:Number(byId('maxFiles').value || 20)};
+  const payload={recursive:byId('recursive').checked, alpha:byId('alpha').checked, max_files:Number(byId('maxFiles').value || 20)};
   if(file) { payload.name=file.name; payload.text=await file.text(); }
   else if(pasted.trim()) { payload.name='pasted.lua'; payload.text=pasted; }
   else if(url) { payload.url=url; }
@@ -118,6 +132,12 @@ button.addEventListener('click', async () => {
     render(data); status.textContent=`Done — ${data.results.length} source file(s) analyzed.`; status.className='ok';
   } catch(error) { status.textContent=error.message || String(error); status.className='error'; }
   finally { button.disabled=false; }
+});
+updateButton.addEventListener('click', async () => {
+  updateButton.disabled=true; updateStatus.textContent=' Checking GitHub…';
+  try { const response=await fetch('/api/update'); const data=await response.json(); if(data.error) throw new Error(data.error); updateStatus.textContent=data.update_available ? ` Update available: ${data.latest_version}` : ` Up to date (${data.current_version})`; }
+  catch(error) { updateStatus.textContent=` Update check failed: ${error.message || String(error)}`; }
+  finally { updateButton.disabled=false; }
 });
 </script>
 </body>
@@ -186,7 +206,7 @@ def analyze_web_payload(payload: dict[str, Any], out_dir: Path, store: ResultSto
 
     response: list[dict[str, Any]] = []
     for name, text, source_url in items:
-        result = analyze_text(text, name)
+        result = analyze_text(text, name, alpha=bool(payload.get("alpha", False)))
         if source_url:
             result.metadata["url"] = source_url
         target = write_result(result, out_dir)
@@ -205,7 +225,7 @@ def analyze_web_payload(payload: dict[str, Any], out_dir: Path, store: ResultSto
 
 
 class MoonWADWebHandler(BaseHTTPRequestHandler):
-    server_version = "MoonWADLocal/0.5.0"
+    server_version = "MoonWADLocal/0.6.0"
 
     def __init__(self, *args: Any, out_dir: Path, store: ResultStore, **kwargs: Any) -> None:
         self.out_dir = out_dir
@@ -233,6 +253,9 @@ class MoonWADWebHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/health":
             self._send_json(HTTPStatus.OK, {"ok": True})
+            return
+        if path == "/api/update":
+            self._send_json(HTTPStatus.OK, check_for_update())
             return
         parts = path.split("/")
         if len(parts) == 5 and parts[:3] == ["", "api", "result"]:
