@@ -136,13 +136,22 @@ call "$BinDir\moonwad.cmd" --web %*
     }
 
     Write-Step '5' 'Running MoonWAD self-tests (no Lua/Luau is executed)...'
-    & $PythonExe @PythonPrefix -m unittest discover -s (Join-Path $AppDir 'tests') -p 'test_*.py'
-    if ($LASTEXITCODE -ne 0) {
-        throw "MoonWAD self-tests failed with exit code $LASTEXITCODE."
-    }
-    & $PythonExe @PythonPrefix (Join-Path $AppDir 'run.py') --version
-    if ($LASTEXITCODE -ne 0) {
-        throw "MoonWAD version check failed with exit code $LASTEXITCODE."
+    # Force the freshly copied application directory to the front of Python's
+    # import path.  A previous `pip install moonwad` must not make a self-test
+    # accidentally import an older package from site-packages.
+    $env:PYTHONPATH = $AppDir
+    Push-Location $AppDir
+    try {
+        & $PythonExe @PythonPrefix -m unittest discover -s (Join-Path $AppDir 'tests') -p 'test_*.py'
+        if ($LASTEXITCODE -ne 0) {
+            throw "MoonWAD self-tests failed with exit code $LASTEXITCODE."
+        }
+        & $PythonExe @PythonPrefix (Join-Path $AppDir 'run.py') --version
+        if ($LASTEXITCODE -ne 0) {
+            throw "MoonWAD version check failed with exit code $LASTEXITCODE."
+        }
+    } finally {
+        Pop-Location
     }
 
     Write-Step '6' 'Finished.'
