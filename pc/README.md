@@ -7,6 +7,7 @@ administrator access. It needs Python 3.10+ and installs the fixed `moonwad`
 branch to `%LOCALAPPDATA%\MoonWAD`. It creates these commands:
 
 - `moonwad` — CLI and analysis command
+- `moonwad-cli` — alias for the fresh CLI command
 - `moonwad-web` — local browser UI
 - `moonwad-update` — download the fixed branch again and re-run self-tests
 

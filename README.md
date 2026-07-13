@@ -85,7 +85,7 @@ bash ~/.local/share/moonwad/scripts/install-wad-vm-termux.sh
 
 The Windows installer needs Python 3.10+ but does not need Git or administrator
 rights. It downloads the fixed `moonwad` branch into
-`%LOCALAPPDATA%\MoonWAD`, creates `moonwad`, `moonwad-web`, and
+`%LOCALAPPDATA%\MoonWAD`, creates `moonwad`, `moonwad-cli`, `moonwad-web`, and
 `moonwad-update` commands, adds them to your user `PATH`, and runs the full
 self-test with verbose step-by-step output.
 
@@ -119,6 +119,10 @@ terminal and run:
 moonwad --web
 moonwad-update
 ```
+
+Use `moonwad` (or `moonwad-cli`) after installation. If you run an older
+`MoonWAD-CLI.exe` copied into the same directory as your Lua file, Windows may
+prefer that old EXE over the fresh PATH command.
 
 The `pc/` folder contains a source launcher and an executable build script.
 `MoonWAD.exe` starts the web UI by default, while `MoonWAD-CLI.exe` is the

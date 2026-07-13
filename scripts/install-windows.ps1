@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Downloads the fixed public MoonWAD branch, installs it under LocalAppData,
-    creates `moonwad` and `moonwad-update` command wrappers, and runs the test
+    creates `moonwad`, `moonwad-cli`, and `moonwad-update` command wrappers, and runs the test
     suite. It never needs administrator permissions and never executes any
     Lua/Luau input during installation.
 #>
@@ -133,6 +133,7 @@ call "$BinDir\moonwad.cmd" --web %*
 "@
     $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText((Join-Path $BinDir 'moonwad.cmd'), $MoonWADCommand, $Utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $BinDir 'moonwad-cli.cmd'), $MoonWADCommand, $Utf8NoBom)
     [System.IO.File]::WriteAllText((Join-Path $BinDir 'moonwad-update.cmd'), $UpdateCommand, $Utf8NoBom)
     [System.IO.File]::WriteAllText((Join-Path $BinDir 'moonwad-web.cmd'), $WebCommand, $Utf8NoBom)
     Write-Host ('Created command folder: ' + $BinDir)
@@ -201,6 +202,7 @@ call "$BinDir\moonwad.cmd" --web %*
     Write-Host 'Use one of these commands in this window or a new terminal:' -ForegroundColor Green
     Write-Host '  moonwad --web'
     Write-Host '  moonwad path\to\script.lua'
+    Write-Host '  moonwad-cli path\to\script.lua   (CLI alias)'
     Write-Host '  moonwad path\to\known-wad.lua --wad-sandbox'
     Write-Host '  moonwad-update'
     Write-Host ''
