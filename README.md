@@ -103,9 +103,9 @@ The installer tests the exact app folder it just copied, rather than an older
 pip installations cannot make its self-test use the wrong version.
 
 If an unusually new Python version does not have a prebuilt optional `lupa`
-wheel yet but you also have Python 3.12 installed through the Windows Python
-Launcher, select it explicitly (the installed command and future updater will
-keep using that selector):
+wheel yet and `py -0p` shows that Python 3.12 is installed through the Windows
+Python Launcher, select it explicitly (the installed command and future updater
+will keep using that selector):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File $installer -PythonSelector '-3.12'

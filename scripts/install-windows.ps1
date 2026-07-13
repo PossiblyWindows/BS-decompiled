@@ -62,14 +62,41 @@ if (-not $PythonExe) {
     Write-Host '  winget install -e --id Python.Python.3.12'
     exit 1
 }
-$VersionText = (& $PythonExe @PythonPrefix --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $VersionText -notmatch 'Python\s+(?<major>\d+)\.(?<minor>\d+)') {
+$SavedErrorActionPreference = $ErrorActionPreference
+try {
+    # Python Launcher writes unavailable-runtime messages to stderr.  Keep
+    # those messages as text so this installer can give a useful error instead
+    # of PowerShell stopping on the native command before the check below.
+    $ErrorActionPreference = 'Continue'
+    $VersionText = (& $PythonExe @PythonPrefix --version 2>&1 | Out-String).Trim()
+    $VersionExit = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $SavedErrorActionPreference
+}
+if ($VersionExit -ne 0 -or $VersionText -notmatch 'Python\s+(?<major>\d+)\.(?<minor>\d+)') {
+    if ($PythonSelector) {
+        throw "Python selector '$PythonSelector' is not installed. Run 'py -0p' to list installed versions, or rerun without -PythonSelector."
+    }
     throw "Could not determine a usable Python version from: $VersionText"
 }
 if ([int]$Matches.major -lt 3 -or ([int]$Matches.major -eq 3 -and [int]$Matches.minor -lt 10)) {
     throw "MoonWAD needs Python 3.10+; found $VersionText"
 }
 Write-Host ('Using ' + $VersionText)
+
+function Invoke-OptionalPython([string[]]$PythonArguments) {
+    # Optional components must never turn an otherwise usable installer into
+    # a failure just because a native Python command writes to stderr.  Keep
+    # pip's normal output visible, capture its exit code, then decide below.
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $PythonExe @PythonPrefix @PythonArguments
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+}
 
 try {
     Write-Step '2' 'Downloading the public MoonWAD source branch...'
@@ -161,13 +188,20 @@ call "$BinDir\moonwad.cmd" --web %*
         # This component is optional.  It is used only by the explicit
         # --wad-sandbox feature for recognized WeAreDevs/WAD wrappers and is
         # never needed for normal static analysis or self-tests.
-        & $PythonExe @PythonPrefix -c "from lupa.lua51 import LuaRuntime; print('Restricted WAD VM component already available.')" 2>$null
-        if ($LASTEXITCODE -eq 0) {
+        # `find_spec` exits quietly when Lupa is absent.  Do not import it
+        # directly here: an ImportError traceback is noisy and can be treated
+        # as fatal by PowerShell's native-command error handling.
+        $LupaProbeExit = Invoke-OptionalPython -PythonArguments @(
+            '-c',
+            "from importlib.util import find_spec; import sys; sys.exit(0 if find_spec('lupa') else 1)"
+        )
+        if ($LupaProbeExit -eq 0) {
             Write-Host 'Restricted WAD VM component is already available.' -ForegroundColor Green
         } else {
             Write-Host 'Optional Lupa component is not installed; attempting a prebuilt package install...' -ForegroundColor Yellow
-            & $PythonExe @PythonPrefix -m pip install --disable-pip-version-check --only-binary=:all: "lupa>=2.8,<3"
-            $PipExit = $LASTEXITCODE
+            $PipExit = Invoke-OptionalPython -PythonArguments @(
+                '-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=:all:', "lupa>=2.8,<3"
+            )
             if ($PipExit -eq 0) {
                 Write-Host 'Installed the restricted WAD VM component.' -ForegroundColor Green
             } else {
