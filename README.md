@@ -64,7 +64,13 @@ See [pc/README.md](pc/README.md) for the PC release details.
 
 ## Termux setup
 
-From the downloaded or cloned project folder:
+Fastest install: paste this into Termux:
+
+```sh
+pkg update -y && pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/PossiblyWindows/BS-decompiled/moonwad/scripts/install-from-github.sh | bash
+```
+
+Or, from a downloaded/cloned project folder:
 
 ```sh
 bash termux-setup.sh
@@ -81,12 +87,21 @@ Analyze a local file:
 
 ```sh
 moonwad ~/storage/downloads/input.lua
+# Alpha trace for harmless literal print/warn examples:
+moonwad ~/storage/downloads/input.lua --alpha
 ```
 
 Launch the same local browser UI in Termux:
 
 ```sh
-moonwad --web
+moonwad --web --no-browser
+```
+
+Then open the printed `http://127.0.0.1:8765` address in your phone browser.
+To fetch the newest MoonWAD branch later, run:
+
+```sh
+moonwad-update
 ```
 
 Analyze a raw GitHub loader and recursively fetch GitHub dependencies without executing them:
@@ -158,10 +173,11 @@ If your inputs are in Android Downloads, allow storage once after setup:
 termux-setup-storage
 ```
 
-Or use the included bootstrap helper:
+Or use the included bootstrap helper (the GitHub URL and `moonwad` branch are
+the defaults, so no arguments are needed):
 
 ```sh
-bash scripts/install-from-github.sh https://github.com/PossiblyWindows/BS-decompiled.git moonwad
+bash scripts/install-from-github.sh
 ```
 
 ## Scope

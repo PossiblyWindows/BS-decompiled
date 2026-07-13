@@ -1,20 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 
-REPO_URL="${1:-}"
-BRANCH="${2:-}"
-if [ -z "$REPO_URL" ]; then
-  echo "Usage: bash install-from-github.sh https://github.com/OWNER/REPO.git [branch]"
-  exit 2
-fi
+REPO_URL="${1:-https://github.com/PossiblyWindows/BS-decompiled.git}"
+BRANCH="${2:-moonwad}"
 
 pkg update -y
-pkg install -y git python
+pkg install -y git python ca-certificates
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-if [ -n "$BRANCH" ]; then
-  git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$TMP/moonwad"
-else
-  git clone --depth 1 "$REPO_URL" "$TMP/moonwad"
-fi
+echo "Installing MoonWAD from $REPO_URL ($BRANCH)..."
+git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$TMP/moonwad"
 bash "$TMP/moonwad/termux-setup.sh"
