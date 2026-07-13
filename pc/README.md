@@ -32,6 +32,13 @@ folder. If Python is absent, it stops and shows an optional
 Use `-SkipWadSandbox` to omit the optional component; static analysis is still
 fully functional.
 
+If the newest Python does not have a prebuilt optional `lupa` wheel, and Python
+3.12 is installed through `py.exe`, use:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -PythonSelector '-3.12'
+```
+
 ## Ready-made executable
 
 After the GitHub Actions **Build Windows executable** job completes, download

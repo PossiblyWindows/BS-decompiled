@@ -13,7 +13,8 @@
 param(
     [switch]$Update,
     [switch]$NoPath,
-    [switch]$SkipWadSandbox
+    [switch]$SkipWadSandbox,
+    [string]$PythonSelector
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,7 +40,17 @@ Write-Host ''
 Write-Step '1' 'Checking for Python 3.10 or newer...'
 $PythonExe = $null
 $PythonPrefix = @()
-if (Get-Command py -ErrorAction SilentlyContinue) {
+if ($PythonSelector) {
+    if ($PythonSelector -notmatch '^-3(?:\.\d+)?$') {
+        throw "-PythonSelector must be a Python Launcher selector such as '-3.12'."
+    }
+    if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
+        throw "-PythonSelector needs the Windows Python Launcher (py.exe), but it was not found."
+    }
+    $PythonExe = 'py'
+    $PythonPrefix = @($PythonSelector)
+    Write-Host ('Using requested Python Launcher selector: py ' + $PythonSelector)
+} elseif (Get-Command py -ErrorAction SilentlyContinue) {
     $PythonExe = 'py'
     $PythonPrefix = @('-3')
 } elseif (Get-Command python -ErrorAction SilentlyContinue) {
@@ -97,7 +108,12 @@ try {
     }
     Copy-Item -Recurse -Force $SourceDir.FullName $AppDir
 
-    $PythonCall = if ($PythonExe -eq 'py') { 'py -3' } else { 'python' }
+    $PythonCall = if ($PythonExe -eq 'py') { 'py ' + ($PythonPrefix -join ' ') } else { 'python' }
+    $UpdateSelectorArgument = if ($PythonExe -eq 'py' -and $PythonPrefix.Count -gt 0) {
+        " -PythonSelector '$($PythonPrefix[0])'"
+    } else {
+        ''
+    }
     $MoonWADCommand = @"
 @echo off
 setlocal
@@ -108,7 +124,7 @@ call $PythonCall "$AppDir\run.py" %*
     $UpdateCommand = @"
 @echo off
 setlocal
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$AppDir\scripts\install-windows.ps1" -Update
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$AppDir\scripts\install-windows.ps1" -Update$UpdateSelectorArgument
 "@
     $WebCommand = @"
 @echo off
@@ -156,6 +172,7 @@ call "$BinDir\moonwad.cmd" --web %*
             } else {
                 Write-Host ('Could not install the optional WAD VM component (pip exit code ' + $PipExit + ').') -ForegroundColor Yellow
                 Write-Host 'The installer will continue: normal static analysis is ready. Use a Python version with a Lupa wheel or run the optional source setup later if you want --wad-sandbox.' -ForegroundColor Yellow
+                Write-Host "Tip: if Python 3.12 is installed through py.exe, rerun this installer with -PythonSelector '-3.12'." -ForegroundColor Yellow
             }
         }
     }
