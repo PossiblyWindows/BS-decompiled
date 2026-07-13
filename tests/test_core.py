@@ -11,7 +11,7 @@ from unittest.mock import patch
 from moonwad.alpha_trace import alpha_trace_text, trace_literal_output
 from moonwad.cli import analyze_text, main, write_result
 from moonwad.github_fetch import normalize_github_file_url, parse_repo_url
-from moonwad.passes import extract_flattened_vm_map, flattened_vm_map_text, normalize
+from moonwad.passes import extract_constant_tables, extract_flattened_vm_map, flattened_vm_map_text, normalize
 from moonwad.updates import check_for_update
 from moonwad.web import make_web_server
 
@@ -84,6 +84,15 @@ class MoonWADTests(unittest.TestCase):
     def test_numeric_parentheses_are_folded(self) -> None:
         output, _, _ = normalize("local value=-1006551-(-1007150)")
         self.assertIn("value=599", output)
+
+    def test_lua_leading_zero_integers_are_decimal(self) -> None:
+        output, _, _ = normalize("local value=001+002")
+        self.assertIn("value=3", output)
+        trace = trace_literal_output("print(001, string.char(065))")
+        self.assertTrue(trace["accepted"])
+        self.assertEqual(trace["outputs"], [{"kind": "print", "text": "1\tA"}])
+        tables = extract_constant_tables("local values={001,002,003,004,005,006,007,008,009,010}")
+        self.assertEqual(tables[0]["numbers_preview"][:5], [1, 2, 3, 4, 5])
 
     def test_flattened_vm_static_map(self) -> None:
         vm_map = extract_flattened_vm_map(FLATTENED_VM)

@@ -4,6 +4,9 @@ from dataclasses import dataclass
 import re
 
 
+_LUA_INTEGER_LITERAL = re.compile(r"(?P<sign>[+-]?)(?P<value>0[xX][0-9A-Fa-f]+|\d+)\Z")
+
+
 @dataclass(frozen=True)
 class LuaString:
     start: int
@@ -11,6 +14,22 @@ class LuaString:
     raw: str
     value: str
     quote: str
+
+
+def parse_lua_integer(text: str) -> int:
+    """Parse a Lua integer literal without Python's accidental octal rule.
+
+    Lua treats ``001`` as decimal one.  ``int(value, 0)`` is tempting for
+    hexadecimal values, but Python rejects that same valid Lua spelling.
+    Keep this small helper at the Lua parsing boundary so static passes all
+    agree on the language being inspected.
+    """
+    match = _LUA_INTEGER_LITERAL.fullmatch(text.strip())
+    if not match:
+        raise ValueError(f"not a Lua integer literal: {text!r}")
+    value = match.group("value")
+    parsed = int(value[2:], 16) if value.lower().startswith("0x") else int(value, 10)
+    return -parsed if match.group("sign") == "-" else parsed
 
 
 def decode_lua_escaped(body: str) -> str:

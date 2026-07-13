@@ -8,7 +8,7 @@ import math
 import re
 from typing import Callable
 
-from .lua_strings import lua_quote, replace_ranges, scan_lua_strings
+from .lua_strings import lua_quote, parse_lua_integer, replace_ranges, scan_lua_strings
 from .models import PassResult
 
 
@@ -63,8 +63,17 @@ def _safe_number(expression: str) -> int | float | None:
         return None
     if not re.fullmatch(r"[0-9A-Fa-fxX+\-*/%^().\s]+", expression):
         return None
+    # Lua accepts decimal literals such as ``001``.  Python's AST parser
+    # rejects them because it interprets the prefix as old octal syntax, so
+    # canonicalise standalone decimal tokens before asking Python only to
+    # validate our already-literal-only arithmetic expression.
+    python_expression = re.sub(
+        r"(?<![\w.])\d+(?![\w.])",
+        lambda match: str(parse_lua_integer(match.group(0))),
+        expression,
+    )
     try:
-        node = ast.parse(expression.replace("^", "**"), mode="eval").body
+        node = ast.parse(python_expression.replace("^", "**"), mode="eval").body
     except SyntaxError:
         return None
 
@@ -615,7 +624,7 @@ def _parse_int_list(text: str) -> list[int] | None:
         if not part:
             return None
         try:
-            value = int(part, 0)
+            value = parse_lua_integer(part)
         except ValueError:
             return None
         if not 0 <= value <= 0x10FFFF:
@@ -732,11 +741,11 @@ def decode_simple_gsub_codecs(source: str) -> tuple[str, PassResult]:
                 continue
             if index >= 3:
                 sign = m.group(1)
-                k = int(m.group(2), 0)
+                k = parse_lua_integer(m.group(2))
                 if sign == "-":
                     k = -k
             else:
-                k = int(m.group(1), 0)
+                k = parse_lua_integer(m.group(1))
             return op(b, k) & 0xFF
         return None
 
@@ -893,7 +902,10 @@ def extract_constant_tables(source: str) -> list[dict[str, object]]:
     for match in pattern.finditer(source):
         body = match.group(2)
         strings = [tok.value for tok in scan_lua_strings(body)]
-        numbers = [int(x, 0) for x in re.findall(r"(?<![\w.])(?:0[xX][0-9A-Fa-f]+|\d+)(?![\w.])", body)[:2000]]
+        numbers = [
+            parse_lua_integer(x)
+            for x in re.findall(r"(?<![\w.])(?:0[xX][0-9A-Fa-f]+|\d+)(?![\w.])", body)[:2000]
+        ]
         if len(strings) + len(numbers) < 5:
             continue
         tables.append({

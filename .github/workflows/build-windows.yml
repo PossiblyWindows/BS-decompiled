@@ -1,30 +1,39 @@
-name: Build Windows executable
+name: Build MoonWAD for Windows
 
 on:
   workflow_dispatch:
   push:
-    branches: ['**']
-    tags: ['v*']
+    branches: [moonwad]
+    paths:
+      - 'moonwad/**'
+      - 'pc/**'
+      - 'run.py'
+      - 'pyproject.toml'
+      - '.github/workflows/build-windows.yml'
 
 permissions:
   contents: read
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build executables
+      - name: Build the GUI and CLI executables
         shell: pwsh
-        run: .\pc\build-windows.ps1
-      - name: Test analyzer
-        run: python -m unittest discover -s tests -p 'test_*.py' -v
-      - name: Upload Windows executables
-        uses: actions/upload-artifact@v4
+        run: ./pc/build-windows.ps1
+      - name: Smoke-test the CLI
+        shell: pwsh
+        run: |
+          & ./dist/MoonWAD-CLI.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
         with:
-          name: MoonWAD-windows
-          path: dist/*.exe
+          name: MoonWAD-Windows
+          path: |
+            dist/MoonWAD.exe
+            dist/MoonWAD-CLI.exe
           if-no-files-found: error

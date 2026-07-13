@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .lua_strings import scan_lua_strings
+from .lua_strings import parse_lua_integer, scan_lua_strings
 
 
 MAX_ALPHA_SOURCE = 256 * 1024
@@ -103,7 +103,7 @@ def _literal_value(expression: str) -> tuple[bool, str]:
         return True, expression
     if re.fullmatch(r"[+-]?(?:0[xX][0-9A-Fa-f]+|\d+(?:\.\d+)?)", expression):
         try:
-            return True, str(int(expression, 0)) if not "." in expression else str(float(expression))
+            return True, str(parse_lua_integer(expression)) if not "." in expression else str(float(expression))
         except ValueError:
             return False, ""
 
@@ -123,7 +123,7 @@ def _literal_value(expression: str) -> tuple[bool, str]:
         for part in _split_top_level(char_match.group("args"), ","):
             if not re.fullmatch(r"(?:0[xX][0-9A-Fa-f]+|\d+)", part):
                 return False, ""
-            value = int(part, 0)
+            value = parse_lua_integer(part)
             if not 0 <= value <= 255:
                 return False, ""
             values.append(chr(value))
