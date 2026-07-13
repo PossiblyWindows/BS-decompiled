@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "moonwad"
-version = "0.7.0"
+version = "0.7.1"
 description = "Static Lua/Luau obfuscation analyzer for MoonSec, Prometheus and WeAreDevs loaders"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "MoonWAD contributors"}]
+
+[project.optional-dependencies]
+wad-sandbox = ["lupa>=2.8,<3"]
 
 [project.scripts]
 moonwad = "moonwad.cli:main"

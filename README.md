@@ -10,7 +10,7 @@ A static Lua/Luau analysis and normalization toolkit for:
 - numeric/hex Lua escapes, `string.char`, literal concatenation, `table.concat`, `string.reverse`, and simple per-byte `gsub` codecs
 - URLs, Roblox `require(...)` IDs, literal `load`/`loadstring` payloads, base64 candidates, and constant-table inventories
 
-It does **not execute the target Lua/Luau source**. Generic MoonSec V3 is a changing custom-VM family, so the built-in engine does not pretend every file can be restored perfectly. It simplifies and extracts everything it can prove statically, then leaves unresolved VM code intact.
+By default it does **not execute the target Lua/Luau source**. Generic MoonSec V3 is a changing custom-VM family, so the built-in engine does not pretend every file can be restored perfectly. It simplifies and extracts everything it can prove statically, then leaves unresolved VM code intact. The only runtime-adjacent feature is the separately described, opt-in, WAD-only restricted trace.
 
 ## Easy local GUI (`--web` / `-web`)
 
@@ -24,8 +24,11 @@ moonwad --web
 The server only listens on `127.0.0.1`, prints its local URL, and opens a
 browser when one is available. Use `--no-browser` to only print the link or
 `--web-port 0` to choose a free port. The GUI can analyze a local file, pasted
-source, or public GitHub/raw URL. It never executes submitted Lua/Luau. The
-**Check for updates** button compares the installed version with the fixed
+source, or public GitHub/raw URL. Static analysis and Alpha tracing never
+execute submitted Lua/Luau. The optional WAD VM checkbox is restricted to a
+recognized WeAreDevs/WAD wrapper and starts it only in a short-lived,
+capability-free child with no target-code access to OS, files, network,
+packages, loaders, debuggers, Roblox APIs, or Python. The **Check for updates** button compares the installed version with the fixed
 MoonWAD GitHub branch. Install/update commands are provided below for both PC
 and Termux.
 
@@ -45,6 +48,37 @@ functions, loops, loaders, HTTP, globals, or VM dispatchers. If a WAD wrapper
 hides `print("hello")` inside its flattened VM, the trace report says so
 explicitly instead of pretending the VM ran.
 
+## Experimental restricted WAD VM trace
+
+Some known WeAreDevs/WAD wrappers hide harmless output behind a flattened Lua
+5.1 VM. If you own or are authorized to inspect such a wrapper, you can opt in
+to a much narrower trace:
+
+```sh
+moonwad known-wad.lua --wad-sandbox
+```
+
+It only accepts a source banner for `wearedevs.net/obfuscator`, rejects direct
+capability names, and runs it for at most two seconds in a separate process.
+The target gets pure Lua helpers and captured `print`/`warn` only. It does not
+receive OS, filesystem, network, package, loader, debugger, Roblox, or Python
+access. It never enables general Lua execution.
+
+The output folder gains:
+
+- `wad-trace.txt` and `wad-trace.json` — exact accept/refusal logs and captured output
+- `observed-output.lua` — a clearly labelled behavioral witness such as
+  `print("TESTESTESTESTESTEST")`; it is not presented as a full original-source recovery
+
+The Windows installer attempts to install the optional prebuilt `lupa` Lua 5.1
+binding and continues normally if no wheel is available. To skip that optional
+step, append `-SkipWadSandbox` to the installer command. On Termux, install the
+optional binding explicitly:
+
+```sh
+bash ~/.local/share/moonwad/scripts/install-wad-vm-termux.sh
+```
+
 ## PC / Windows
 
 ### Easy per-user install and update
@@ -63,6 +97,10 @@ $installer = Join-Path $env:TEMP 'MoonWAD-install.ps1'
 Invoke-WebRequest 'https://raw.githubusercontent.com/PossiblyWindows/BS-decompiled/moonwad/scripts/install-windows.ps1' -OutFile $installer
 powershell -NoProfile -ExecutionPolicy Bypass -File $installer
 ```
+
+The installer tests the exact app folder it just copied, rather than an older
+`moonwad` package that may be in Python's `site-packages`. That means existing
+pip installations cannot make its self-test use the wrong version.
 
 If Python is missing, the installer stops before downloading the app and prints
 the exact optional `winget` command to install Python. Later, open a new
@@ -118,6 +156,8 @@ Analyze a local file:
 moonwad ~/storage/downloads/input.lua
 # Alpha trace for harmless literal print/warn examples:
 moonwad ~/storage/downloads/input.lua --alpha
+# Opt-in trace for a recognized WAD wrapper only:
+moonwad ~/storage/downloads/known-wad.lua --wad-sandbox
 ```
 
 Launch the same local browser UI in Termux:
@@ -151,6 +191,7 @@ Results are written under `moonwad-output/<source>/`:
 - `normalized.lua` — legacy-compatible copy of the same recovered output
 - `vm-map.txt` and `vm-map.json` when a flattened dispatcher is found
 - `alpha-trace.txt` and `alpha-trace.json` when Alpha static output trace is selected
+- `wad-trace.txt`, `wad-trace.json`, and `observed-output.lua` when the explicit restricted WAD trace completes
 - `strings.txt`
 - `report.txt`
 - `report.json`

@@ -25,12 +25,13 @@ from .passes import (
 )
 from .report import text_report
 from .updates import check_for_update, launch_installed_updater, update_status_text
+from .wad_sandbox import run_restricted_wad_trace, wad_observed_output_lua, wad_trace_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def analyze_text(text: str, name: str, alpha: bool = False) -> AnalysisResult:
+def analyze_text(text: str, name: str, alpha: bool = False, wad_sandbox: bool = False) -> AnalysisResult:
     normalized, passes, strings = normalize(text)
     detections = detect(text)
     warnings: list[str] = []
@@ -53,6 +54,21 @@ def analyze_text(text: str, name: str, alpha: bool = False) -> AnalysisResult:
         metadata["alpha_trace"] = alpha_trace
         if not alpha_trace.get("accepted"):
             warnings.append("Alpha static output trace did not accept the complete source; read alpha-trace.txt for its exact log. Alpha mode never executes Lua/Luau or loaders.")
+    if wad_sandbox:
+        # This is deliberately opt-in and receives the original source rather
+        # than the normalized preview.  The child verifier recognizes only the
+        # WAD marker and provides its target code no operating-system, file,
+        # network, package, debugger, loader, Roblox, or Python bridge.
+        wad_trace = run_restricted_wad_trace(text)
+        metadata["wad_trace"] = wad_trace
+        if wad_trace.get("executed"):
+            warnings.append(
+                "Experimental restricted WAD VM trace completed. Captured print/warn output is in wad-trace.txt; static recovery remains in deobfuscated.lua."
+            )
+        else:
+            warnings.append(
+                "Experimental restricted WAD VM trace did not complete. Read wad-trace.txt for the exact refusal, timeout, or optional-component message."
+            )
     if len(text) > 5_000_000:
         warnings.append("Large source: some table extraction limits may truncate previews.")
     return AnalysisResult(
@@ -100,6 +116,12 @@ def write_result(result: AnalysisResult, out_dir: Path) -> Path:
     if isinstance(alpha_trace, dict):
         (target / "alpha-trace.txt").write_text(alpha_trace_text(alpha_trace), encoding="utf-8")
         (target / "alpha-trace.json").write_text(json.dumps(alpha_trace, indent=2, ensure_ascii=False), encoding="utf-8")
+    wad_trace = result.metadata.get("wad_trace")
+    if isinstance(wad_trace, dict):
+        (target / "wad-trace.txt").write_text(wad_trace_text(wad_trace), encoding="utf-8")
+        (target / "wad-trace.json").write_text(json.dumps(wad_trace, indent=2, ensure_ascii=False), encoding="utf-8")
+        if wad_trace.get("executed"):
+            (target / "observed-output.lua").write_text(wad_observed_output_lua(wad_trace), encoding="utf-8")
     if result.payloads:
         payload_dir = target / "payloads"
         payload_dir.mkdir(exist_ok=True)
@@ -170,6 +192,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="write a static literal-output trace and verbose log; it never executes Lua/Luau",
     )
+    parser.add_argument(
+        "--wad-sandbox",
+        action="store_true",
+        help="experimental: trace only recognized WeAreDevs/WAD wrappers in a capability-free child; it never runs general Lua",
+    )
     parser.add_argument("-web", "--web", action="store_true", help="start the local browser UI (127.0.0.1 only)")
     parser.add_argument("--web-port", type=int, default=8765, help="local browser UI port; use 0 for an available port")
     parser.add_argument("--no-browser", action="store_true", help="do not automatically open a browser with --web")
@@ -183,26 +210,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.check_update:
-        if args.input or args.web or args.engine != "builtin" or args.install_update:
+        if args.input or args.web or args.engine != "builtin" or args.install_update or args.alpha or args.wad_sandbox:
             parser.error("--check-update is used on its own")
         status = check_for_update()
         print(update_status_text(status))
         return 1 if status.get("error") else 0
     if args.install_update:
-        if args.input or args.web or args.engine != "builtin" or args.alpha:
+        if args.input or args.web or args.engine != "builtin" or args.alpha or args.wad_sandbox:
             parser.error("--install-update is used on its own")
         status = launch_installed_updater()
         print(str(status.get("message", "Updater status unavailable.")))
         return 0 if status.get("started") else 1
-    if args.alpha and args.engine != "builtin":
-        parser.error("--alpha only supports MoonWAD's built-in static output trace")
+    if (args.alpha or args.wad_sandbox) and args.engine != "builtin":
+        parser.error("--alpha and --wad-sandbox only support MoonWAD's built-in analysis path")
     if args.web:
         if args.input:
             parser.error("--web starts the local UI; submit the file through that UI instead")
         if not 0 <= args.web_port <= 65535:
             parser.error("--web-port must be between 0 and 65535")
-        if args.alpha:
-            parser.error("choose Alpha static output trace in the web page after starting --web")
+        if args.alpha or args.wad_sandbox:
+            parser.error("choose Alpha static output trace or restricted WAD VM trace in the web page after starting --web")
         from .web import serve_web
 
         out_dir = Path(args.out_dir).expanduser().resolve()
@@ -219,13 +246,16 @@ def main(argv: list[str] | None = None) -> int:
             fetched = collect_remote(source, args.recursive, max(1, min(args.max_files, 200)))
             manifest: list[dict[str, str]] = []
             for item in fetched:
-                result = analyze_text(item.text, item.name, alpha=args.alpha)
+                result = analyze_text(item.text, item.name, alpha=args.alpha, wad_sandbox=args.wad_sandbox)
                 result.metadata["url"] = item.url
                 target = write_result(result, out_dir)
                 manifest.append({"url": item.url, "source": item.name, "output": str(target)})
                 print(f"[{result.detected[0].name if result.detected else 'unknown'}] {item.name} -> {target}")
             (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-            print(f"Analyzed {len(fetched)} remote file(s). No remote code was executed.")
+            if args.wad_sandbox:
+                print(f"Analyzed {len(fetched)} remote file(s). Only recognized WAD wrappers were eligible for the explicit restricted trace.")
+            else:
+                print(f"Analyzed {len(fetched)} remote file(s). No remote code was executed.")
             return 0
 
         input_path = Path(source).expanduser().resolve()
@@ -249,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"External static/reference engine output: {output_path}")
             return 0
         text = input_path.read_text(encoding="utf-8", errors="replace")
-        result = analyze_text(text, input_path.name, alpha=args.alpha)
+        result = analyze_text(text, input_path.name, alpha=args.alpha, wad_sandbox=args.wad_sandbox)
         target = write_result(result, out_dir)
         print(text_report(result))
         print(f"Output: {target}")

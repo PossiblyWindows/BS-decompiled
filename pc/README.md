@@ -25,8 +25,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $installer
 ```
 
 The installer reports every phase, validates the downloaded project structure,
-and runs the unit tests. If Python is absent, it stops and shows an optional
+installs the optional restricted WAD VM component when a compatible prebuilt
+wheel is available, and runs the unit tests against the freshly copied app
+folder. If Python is absent, it stops and shows an optional
 `winget` installation command rather than changing your system automatically.
+Use `-SkipWadSandbox` to omit the optional component; static analysis is still
+fully functional.
 
 ## Ready-made executable
 
@@ -36,15 +40,18 @@ the `MoonWAD-windows` artifact. It contains:
 - `MoonWAD.exe` — opens the local browser UI when double-clicked.
 - `MoonWAD-CLI.exe` — normal console version.
 
-Both executables use the same local-only static analyzer. They do not execute
-the Lua/Luau file being inspected.
+Both executables use the same local-only static analyzer. Static analysis does
+not execute the Lua/Luau file being inspected. The build also contains the
+separate opt-in `--wad-sandbox` path for recognized WeAreDevs/WAD wrappers;
+that trace uses a short-lived capability-free child and never enables general
+Lua execution.
 
 ## Run from source
 
 Install Python 3.10+ for Windows, then from this project folder run:
 
 ```powershell
-py -3 -m pip install .
+py -3 -m pip install ".[wad-sandbox]"
 py -3 pc\moonwad_pc.py
 ```
 

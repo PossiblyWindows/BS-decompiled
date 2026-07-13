@@ -13,6 +13,7 @@ from moonwad.cli import analyze_text, main, write_result
 from moonwad.github_fetch import normalize_github_file_url, parse_repo_url
 from moonwad.passes import extract_constant_tables, extract_flattened_vm_map, flattened_vm_map_text, normalize
 from moonwad.updates import check_for_update
+from moonwad.wad_sandbox import run_restricted_wad_trace, wad_observed_output_lua, wad_trace_text
 from moonwad.web import make_web_server
 
 
@@ -172,6 +173,37 @@ class MoonWADTests(unittest.TestCase):
             self.assertTrue((target / "alpha-trace.txt").is_file())
             self.assertIn("hello world", (target / "alpha-trace.txt").read_text())
 
+    def test_restricted_wad_trace_refuses_non_wad_source_without_starting_a_vm(self) -> None:
+        trace = run_restricted_wad_trace('print("not a WAD wrapper")')
+        self.assertFalse(trace["accepted"])
+        self.assertFalse(trace["executed"])
+        self.assertIn("not a recognized WeAreDevs/WAD wrapper", " ".join(trace["refusals"]))
+        self.assertIn("Scope: WAD wrappers only", wad_trace_text(trace))
+        self.assertIn("No print/warn output", wad_observed_output_lua(trace))
+
+    def test_restricted_wad_trace_result_files(self) -> None:
+        trace = {
+            "mode": "restricted-wad-vm-trace",
+            "accepted": True,
+            "executed": True,
+            "outputs": [{"kind": "print", "text": "TESTESTESTESTESTEST"}],
+            "refusals": [],
+            "logs": ["fixture trace completed"],
+        }
+        source = "--[[ v1.0.0 https://wearedevs.net/obfuscator ]]\nreturn(function()end)()"
+        with patch("moonwad.cli.run_restricted_wad_trace", return_value=trace) as runtime:
+            result = analyze_text(source, "wad-test.lua", wad_sandbox=True)
+        runtime.assert_called_once_with(source)
+        self.assertIn("wad_trace", result.metadata)
+        self.assertIn("restricted WAD VM trace completed", " ".join(result.warnings))
+        with tempfile.TemporaryDirectory() as tmp:
+            target = write_result(result, Path(tmp))
+            self.assertTrue((target / "wad-trace.txt").is_file())
+            self.assertTrue((target / "wad-trace.json").is_file())
+            self.assertTrue((target / "observed-output.lua").is_file())
+            self.assertIn("TESTESTESTESTESTEST", (target / "wad-trace.txt").read_text())
+            self.assertIn('print("TESTESTESTESTESTEST")', (target / "observed-output.lua").read_text())
+
     def test_update_checker_compares_semantic_versions_without_network(self) -> None:
         newer = check_for_update(lambda: "99.0.0")
         self.assertTrue(newer["update_available"])
@@ -282,6 +314,38 @@ class MoonWADTests(unittest.TestCase):
                 self.assertIn("alpha-trace.txt", item["files"])
                 alpha_text = urlopen(f"{base}{item['files']['alpha-trace.txt']}").read().decode()
                 self.assertIn("hello", alpha_text)
+            finally:
+                server.shutdown()
+                server.server_close()
+                worker.join(timeout=2)
+
+    def test_web_exposes_restricted_wad_trace(self) -> None:
+        trace = {
+            "mode": "restricted-wad-vm-trace",
+            "accepted": True,
+            "executed": True,
+            "outputs": [{"kind": "print", "text": "TESTESTESTESTESTEST"}],
+            "refusals": [],
+            "logs": ["fixture trace completed"],
+        }
+        source = "--[[ v1.0.0 https://wearedevs.net/obfuscator ]]\nreturn(function()end)()"
+        with tempfile.TemporaryDirectory() as tmp, patch("moonwad.cli.run_restricted_wad_trace", return_value=trace):
+            server = make_web_server(Path(tmp), port=0)
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                request = Request(
+                    f"{base}/api/analyze",
+                    data=json.dumps({"name": "wad-test.lua", "text": source, "wad_sandbox": True}).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                item = json.loads(urlopen(request).read())["results"][0]
+                self.assertIn("wad-trace.txt", item["files"])
+                self.assertIn("observed-output.lua", item["files"])
+                trace_text = urlopen(f"{base}{item['files']['wad-trace.txt']}").read().decode()
+                self.assertIn("TESTESTESTESTESTEST", trace_text)
             finally:
                 server.shutdown()
                 server.server_close()

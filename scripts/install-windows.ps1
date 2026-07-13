@@ -12,7 +12,8 @@
 [CmdletBinding()]
 param(
     [switch]$Update,
-    [switch]$NoPath
+    [switch]$NoPath,
+    [switch]$SkipWadSandbox
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,7 +26,7 @@ $BinDir = Join-Path $InstallRoot 'bin'
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("moonwad-install-" + $PID)
 
 function Write-Step([string]$Number, [string]$Message) {
-    Write-Host ("[{0}/6] {1}" -f $Number, $Message) -ForegroundColor Cyan
+    Write-Host ("[{0}/7] {1}" -f $Number, $Message) -ForegroundColor Cyan
 }
 
 Write-Host ''
@@ -135,7 +136,31 @@ call "$BinDir\moonwad.cmd" --web %*
         Write-Host 'Skipped PATH changes because -NoPath was supplied.'
     }
 
-    Write-Step '5' 'Running MoonWAD self-tests (no Lua/Luau is executed)...'
+    Write-Step '5' 'Preparing the optional restricted WAD VM trace component...'
+    if ($SkipWadSandbox) {
+        Write-Host 'Skipped optional Lupa component because -SkipWadSandbox was supplied.' -ForegroundColor Yellow
+        Write-Host 'Static analysis and Alpha static tracing remain fully available.' -ForegroundColor Yellow
+    } else {
+        # This component is optional.  It is used only by the explicit
+        # --wad-sandbox feature for recognized WeAreDevs/WAD wrappers and is
+        # never needed for normal static analysis or self-tests.
+        & $PythonExe @PythonPrefix -c "from lupa.lua51 import LuaRuntime; print('Restricted WAD VM component already available.')" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host 'Restricted WAD VM component is already available.' -ForegroundColor Green
+        } else {
+            Write-Host 'Optional Lupa component is not installed; attempting a prebuilt package install...' -ForegroundColor Yellow
+            & $PythonExe @PythonPrefix -m pip install --disable-pip-version-check --only-binary=:all: "lupa>=2.8,<3"
+            $PipExit = $LASTEXITCODE
+            if ($PipExit -eq 0) {
+                Write-Host 'Installed the restricted WAD VM component.' -ForegroundColor Green
+            } else {
+                Write-Host ('Could not install the optional WAD VM component (pip exit code ' + $PipExit + ').') -ForegroundColor Yellow
+                Write-Host 'The installer will continue: normal static analysis is ready. Use a Python version with a Lupa wheel or run the optional source setup later if you want --wad-sandbox.' -ForegroundColor Yellow
+            }
+        }
+    }
+
+    Write-Step '6' 'Running MoonWAD self-tests (no Lua/Luau is executed)...'
     # Force the freshly copied application directory to the front of Python's
     # import path.  A previous `pip install moonwad` must not make a self-test
     # accidentally import an older package from site-packages.
@@ -154,14 +179,16 @@ call "$BinDir\moonwad.cmd" --web %*
         Pop-Location
     }
 
-    Write-Step '6' 'Finished.'
+    Write-Step '7' 'Finished.'
     Write-Host ''
     Write-Host 'Use one of these commands in this window or a new terminal:' -ForegroundColor Green
     Write-Host '  moonwad --web'
     Write-Host '  moonwad path\to\script.lua'
+    Write-Host '  moonwad path\to\known-wad.lua --wad-sandbox'
     Write-Host '  moonwad-update'
     Write-Host ''
     Write-Host 'The local web UI only listens on 127.0.0.1. It saves analysis output beside the folder where you start MoonWAD.'
+    Write-Host 'The optional WAD VM trace is restricted to recognized WAD wrappers and does not enable general Lua execution.'
 } finally {
     if (Test-Path $TempDir) {
         Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue

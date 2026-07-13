@@ -31,6 +31,9 @@ RESULT_FILES = (
     "vm-map.json",
     "alpha-trace.txt",
     "alpha-trace.json",
+    "wad-trace.txt",
+    "wad-trace.json",
+    "observed-output.lua",
     "strings.txt",
     "report.txt",
     "report.json",
@@ -60,7 +63,7 @@ WEB_PAGE = r"""<!doctype html>
   <p class="lede">Local, static Lua/Luau analysis for common MoonSec, Prometheus, and WeAreDevs packing layers.</p>
   <button id="check-update" class="secondary" type="button">Check for updates</button><button id="install-update" class="secondary" type="button" hidden>Install update</button><span id="update-status" class="hint"></span>
   <section class="card">
-    <p class="safe">This page is served only from your device. MoonWAD never runs the Lua/Luau you submit.</p>
+    <p class="safe">This page is served only from your device. Static analysis never runs the Lua/Luau you submit. The clearly labelled WAD trace below is an opt-in exception limited to recognized WAD wrappers in a capability-free child.</p>
     <label for="file">Choose a local Lua/Luau/text file</label>
     <input id="file" type="file" accept=".lua,.luau,.txt,text/plain">
     <p class="hint">Or paste source below. A chosen file takes priority over pasted text.</p>
@@ -78,6 +81,7 @@ WEB_PAGE = r"""<!doctype html>
       </div>
     </div>
     <label class="check"><input id="alpha" type="checkbox"> Alpha static output trace: show provable direct literal <code>print</code>/<code>warn</code> output and a verbose trace log; never execute Lua</label>
+    <label class="check"><input id="wadSandbox" type="checkbox"> Experimental WAD VM trace: run only a recognized WeAreDevs/WAD wrapper in a short-lived capability-free child and capture <code>print</code>/<code>warn</code>. No target access to files, OS, network, packages, loaders, debuggers, Roblox, or Python.</label>
     <button id="analyze">Analyze safely</button>
   </section>
   <section class="card">
@@ -103,6 +107,8 @@ function addRecoveredPreview(parent, files) {
   if(recovered) void addTextPreview(parent,'Recovered static Lua (deobfuscated.lua)',recovered,true);
   if(files['vm-map.txt']) void addTextPreview(parent,'Static VM map (no Lua executed)',files['vm-map.txt'],true);
   if(files['alpha-trace.txt']) void addTextPreview(parent,'Alpha static trace log (no Lua executed)',files['alpha-trace.txt'],true);
+  if(files['wad-trace.txt']) void addTextPreview(parent,'Restricted WAD VM trace (captured output)',files['wad-trace.txt'],true);
+  if(files['observed-output.lua']) void addTextPreview(parent,'Observed output as Lua (not a full source reconstruction)',files['observed-output.lua'],true);
 }
 function render(data) {
   results.replaceChildren();
@@ -120,7 +126,7 @@ function render(data) {
 }
 button.addEventListener('click', async () => {
   const file=byId('file').files[0]; const pasted=byId('source').value; const url=byId('url').value.trim();
-  const payload={recursive:byId('recursive').checked, alpha:byId('alpha').checked, max_files:Number(byId('maxFiles').value || 20)};
+  const payload={recursive:byId('recursive').checked, alpha:byId('alpha').checked, wad_sandbox:byId('wadSandbox').checked, max_files:Number(byId('maxFiles').value || 20)};
   if(file) { payload.name=file.name; payload.text=await file.text(); }
   else if(pasted.trim()) { payload.name='pasted.lua'; payload.text=pasted; }
   else if(url) { payload.url=url; }
@@ -222,7 +228,12 @@ def analyze_web_payload(payload: dict[str, Any], out_dir: Path, store: ResultSto
 
     response: list[dict[str, Any]] = []
     for name, text, source_url in items:
-        result = analyze_text(text, name, alpha=bool(payload.get("alpha", False)))
+        result = analyze_text(
+            text,
+            name,
+            alpha=bool(payload.get("alpha", False)),
+            wad_sandbox=bool(payload.get("wad_sandbox", False)),
+        )
         if source_url:
             result.metadata["url"] = source_url
         target = write_result(result, out_dir)
@@ -241,7 +252,7 @@ def analyze_web_payload(payload: dict[str, Any], out_dir: Path, store: ResultSto
 
 
 class MoonWADWebHandler(BaseHTTPRequestHandler):
-    server_version = "MoonWADLocal/0.7.0"
+    server_version = "MoonWADLocal/0.7.1"
 
     def __init__(self, *args: Any, out_dir: Path, store: ResultStore, **kwargs: Any) -> None:
         self.out_dir = out_dir
