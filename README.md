@@ -4,7 +4,7 @@ A static Lua/Luau analysis and normalization toolkit for:
 
 - MoonSec V2 and V3 signatures and common packing layers
 - Prometheus-style constant arrays and wrappers
-- WeAreDevs v1 loaders
+- WeAreDevs v1 loaders, including static custom-base64 string-table recovery
 - GitHub/raw loader chains and repository source trees
 - numeric/hex Lua escapes, `string.char`, literal concatenation, `table.concat`, `string.reverse`, and simple per-byte `gsub` codecs
 - URLs, Roblox `require(...)` IDs, literal `load`/`loadstring` payloads, base64 candidates, and constant-table inventories
@@ -86,7 +86,8 @@ moonwad 'https://github.com/OWNER/REPO' --max-files 80
 
 Results are written under `moonwad-output/<source>/`:
 
-- `normalized.lua`
+- `deobfuscated.lua` — best static recovery; the web UI displays this inline
+- `normalized.lua` — legacy-compatible copy of the same recovered output
 - `strings.txt`
 - `report.txt`
 - `report.json`

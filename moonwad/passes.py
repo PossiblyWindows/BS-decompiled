@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import base64
 import binascii
+import math
 import re
 from typing import Callable
 
@@ -10,6 +12,17 @@ from .models import PassResult
 
 
 STRING_PATTERN = r'''(?P<q>["'])(?P<body>(?:\\.|(?!\1).)*?)\1'''
+NUMBER_TOKEN = r"(?:0[xX][0-9A-Fa-f]+|\d+(?:\.\d+)?)"
+SIGNED_NUMBER = rf"[+-]?\s*{NUMBER_TOKEN}"
+# WAD also writes expressions such as ``-169953-(-110044)``.  One level of
+# parentheses is enough for the deterministic arithmetic it emits, while
+# keeping the matcher deliberately narrower than general Lua syntax.
+NUMERIC_ATOM = rf"(?:{SIGNED_NUMBER}|\(\s*{SIGNED_NUMBER}\s*\))"
+NUMERIC_CHAIN = re.compile(
+    # Compact Lua permits ``value=1-(-2)next_statement``: the closing
+    # parenthesis is already a token boundary, even though a name follows it.
+    rf"(?<![\w.])(?P<expr>{NUMERIC_ATOM}(?:\s*[+\-*/%^]\s*{NUMERIC_ATOM})+)(?:(?![\w.])|(?<=\))(?=[A-Za-z_]))"
+)
 
 
 def _printable_ratio(value: bytes) -> float:
@@ -30,6 +43,409 @@ def decode_numeric_strings(source: str) -> tuple[str, PassResult, list[str]]:
             continue
         replacements.append((token.start, token.end, lua_quote(token.value)))
     return replace_ranges(source, replacements), PassResult("decode_lua_string_escapes", len(replacements)), strings
+
+
+def _masked_lua_strings(source: str) -> str:
+    """Replace literal characters with spaces while preserving source offsets."""
+    masked = list(source)
+    for token in scan_lua_strings(source):
+        for index in range(token.start, token.end):
+            if masked[index] != "\n":
+                masked[index] = " "
+    return "".join(masked)
+
+
+def _safe_number(expression: str) -> int | float | None:
+    """Evaluate a short, literal-only Lua arithmetic expression without eval()."""
+    expression = expression.strip()
+    if not expression or len(expression) > 160:
+        return None
+    if not re.fullmatch(r"[0-9A-Fa-fxX+\-*/%^().\s]+", expression):
+        return None
+    try:
+        node = ast.parse(expression.replace("^", "**"), mode="eval").body
+    except SyntaxError:
+        return None
+
+    def calculate(item: ast.AST) -> int | float | None:
+        if isinstance(item, ast.Constant) and isinstance(item.value, (int, float)) and not isinstance(item.value, bool):
+            value: int | float = item.value
+        elif isinstance(item, ast.UnaryOp) and isinstance(item.op, (ast.UAdd, ast.USub)):
+            child = calculate(item.operand)
+            if child is None:
+                return None
+            value = child if isinstance(item.op, ast.UAdd) else -child
+        elif isinstance(item, ast.BinOp) and isinstance(item.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow)):
+            left = calculate(item.left)
+            right = calculate(item.right)
+            if left is None or right is None:
+                return None
+            try:
+                if isinstance(item.op, ast.Add):
+                    value = left + right
+                elif isinstance(item.op, ast.Sub):
+                    value = left - right
+                elif isinstance(item.op, ast.Mult):
+                    value = left * right
+                elif isinstance(item.op, ast.Div):
+                    value = left / right
+                elif isinstance(item.op, ast.Mod):
+                    value = left % right
+                else:
+                    if abs(right) > 32:
+                        return None
+                    value = left ** right
+            except (ArithmeticError, OverflowError, ValueError):
+                return None
+        else:
+            return None
+        if not isinstance(value, (int, float)) or not math.isfinite(value) or abs(value) > 2**63:
+            return None
+        return int(value) if isinstance(value, float) and value.is_integer() else value
+
+    return calculate(node)
+
+
+def _number_text(value: int | float) -> str:
+    return str(value) if isinstance(value, int) else format(value, ".15g")
+
+
+def fold_numeric_expressions(source: str) -> tuple[str, PassResult]:
+    """Fold literal Lua arithmetic while preserving text inside Lua strings.
+
+    The WeAreDevs v1 emitter hides almost every index behind values such as
+    ``-698222 + 758270``.  Folding those is prerequisite for static table
+    recovery; this routine intentionally accepts only AST-validated literals.
+    """
+    total = 0
+    for _ in range(32):
+        masked = _masked_lua_strings(source)
+        replacements: list[tuple[int, int, str]] = []
+        for match in NUMERIC_CHAIN.finditer(masked):
+            value = _safe_number(source[match.start("expr"):match.end("expr")])
+            if value is not None:
+                replacement = _number_text(value)
+                # Folding ``1-(-2)next`` into ``3next`` would merge two Lua
+                # tokens.  Preserve the original parenthesis boundary.
+                if (
+                    source[match.end("expr") - 1] == ")"
+                    and match.end("expr") < len(source)
+                    and re.match(r"[A-Za-z_]", source[match.end("expr")])
+                ):
+                    replacement += " "
+                replacements.append((match.start("expr"), match.end("expr"), replacement))
+        if not replacements:
+            break
+        total += len(replacements)
+        source = replace_ranges(source, replacements)
+    return source, PassResult("fold_numeric_expressions", total)
+
+
+def _find_matching_brace(source: str, opening: int) -> int | None:
+    if opening >= len(source) or source[opening] != "{":
+        return None
+    masked = _masked_lua_strings(source)
+    depth = 0
+    for index in range(opening, len(masked)):
+        if masked[index] == "{":
+            depth += 1
+        elif masked[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _split_lua_fields(body: str) -> list[str]:
+    """Split a table body at top-level commas/semicolons."""
+    fields: list[str] = []
+    start = 0
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    for index, char in enumerate(body):
+        if quote:
+            if char == quote and not escaped:
+                quote = None
+            escaped = char == "\\" and not escaped
+            if char != "\\":
+                escaped = False
+            continue
+        if char in "\"'":
+            quote = char
+        elif char in "{[(":
+            depth += 1
+        elif char in "}])" and depth:
+            depth -= 1
+        elif char in ",;" and depth == 0:
+            fields.append(body[start:index].strip())
+            start = index + 1
+    fields.append(body[start:].strip())
+    return fields
+
+
+def _literal_string(field: str) -> str | None:
+    tokens = scan_lua_strings(field)
+    if len(tokens) == 1 and tokens[0].start == 0 and tokens[0].end == len(field):
+        return tokens[0].value
+    return None
+
+
+def _literal_string_array(body: str) -> list[str] | None:
+    values: list[str] = []
+    for field in _split_lua_fields(body):
+        if not field:
+            continue
+        value = _literal_string(field)
+        if value is None:
+            return None
+        values.append(value)
+    return values if values else None
+
+
+def _split_top_level_equals(field: str) -> tuple[str, str] | None:
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    for index, char in enumerate(field):
+        if quote:
+            if char == quote and not escaped:
+                quote = None
+            escaped = char == "\\" and not escaped
+            if char != "\\":
+                escaped = False
+            continue
+        if char in "\"'":
+            quote = char
+        elif char in "{[(":
+            depth += 1
+        elif char in "}])" and depth:
+            depth -= 1
+        elif char == "=" and depth == 0:
+            return field[:index].strip(), field[index + 1:].strip()
+    return None
+
+
+def _string_int_map(body: str) -> dict[str, int] | None:
+    mapping: dict[str, int] = {}
+    for field in _split_lua_fields(body):
+        if not field:
+            continue
+        pair = _split_top_level_equals(field)
+        if pair is None:
+            return None
+        raw_key, raw_value = pair
+        if raw_key.startswith("[") and raw_key.endswith("]"):
+            key = _literal_string(raw_key[1:-1].strip())
+        elif re.fullmatch(r"[A-Za-z_]\w*", raw_key):
+            key = raw_key
+        else:
+            return None
+        value = _safe_number(raw_value)
+        if key is None or not isinstance(value, int):
+            return None
+        mapping[key] = value
+    return mapping or None
+
+
+def _wad_b64_decode(value: str, alphabet: dict[str, int]) -> str | None:
+    """Decode the custom 64-character alphabet used by WeAreDevs v1."""
+    if not value:
+        return ""
+    output = bytearray()
+    for start in range(0, len(value), 4):
+        block = value[start:start + 4]
+        if len(block) < 2:
+            return None
+        block = block.ljust(4, "=")
+        padding = block.count("=")
+        if padding and not block.endswith("=" * padding):
+            return None
+        values: list[int] = []
+        for char in block:
+            if char == "=":
+                values.append(0)
+            elif char in alphabet:
+                values.append(alphabet[char])
+            else:
+                return None
+        packed = (values[0] << 18) | (values[1] << 12) | (values[2] << 6) | values[3]
+        output.append((packed >> 16) & 0xFF)
+        if padding < 2:
+            output.append((packed >> 8) & 0xFF)
+        if padding < 1:
+            output.append(packed & 0xFF)
+    return output.decode("latin1")
+
+
+def _lua_quote_wad_bytes(value: str) -> str:
+    """Quote a Latin-1 WAD value without changing its original byte values."""
+    escaped: list[str] = ['"']
+    for char in value:
+        code = ord(char)
+        if char == "\\":
+            escaped.append("\\\\")
+        elif char == '"':
+            escaped.append('\\"')
+        elif char == "\n":
+            escaped.append("\\n")
+        elif char == "\r":
+            escaped.append("\\r")
+        elif char == "\t":
+            escaped.append("\\t")
+        elif 32 <= code < 127:
+            escaped.append(char)
+        else:
+            escaped.append(f"\\{code:03d}")
+    escaped.append('"')
+    return "".join(escaped)
+
+
+def _wad_shuffle_ranges(source: str, start: int, end: int, table_size: int) -> list[tuple[int, int]]:
+    """Extract the deterministic range reversals ahead of the WAD decoder."""
+    region = source[start:end]
+    ipairs = re.search(r"\bipairs\s*\(\s*\{", region)
+    if not ipairs:
+        return []
+    opening = start + ipairs.end() - 1
+    closing = _find_matching_brace(source, opening)
+    if closing is None or closing > end:
+        return []
+    ranges: list[tuple[int, int]] = []
+    for field in _split_lua_fields(source[opening + 1:closing]):
+        field = field.strip()
+        if not (field.startswith("{") and field.endswith("}")):
+            continue
+        parts = _split_lua_fields(field[1:-1])
+        if len(parts) != 2:
+            continue
+        left, right = _safe_number(parts[0]), _safe_number(parts[1])
+        if isinstance(left, int) and isinstance(right, int) and 1 <= left <= right <= table_size:
+            ranges.append((left, right))
+    return ranges
+
+
+def unpack_wearedevs_v1(source: str) -> tuple[str, PassResult]:
+    """Statically decode the WAD v1 string table and inline its lookup helper.
+
+    It never evaluates the target Lua.  The VM dispatcher itself can differ by
+    sample, so this pass deliberately focuses on the deterministic string
+    codec, table shuffling, and numeric lookup calls shared by this format.
+    """
+    if not re.search(r"wearedevs\.net/obfuscator", source, flags=re.I):
+        return source, PassResult("unpack_wearedevs_v1", 0)
+
+    table_pattern = re.compile(r"\blocal\s+(?P<name>[A-Za-z_]\w*)\s*=\s*\{")
+    accessor_pattern = re.compile(
+        r"\blocal\s+function\s+(?P<function>[A-Za-z_]\w*)\s*\(\s*(?P<parameter>[A-Za-z_]\w*)\s*\)\s*"
+        r"return\s+(?P<table>[A-Za-z_]\w*)\s*\[\s*(?P=parameter)\s*(?P<operator>[+-])\s*\(?\s*(?P<offset>\d+)\s*\)?\s*\]\s*end",
+        re.S,
+    )
+    for table_match in table_pattern.finditer(source):
+        table_opening = table_match.end() - 1
+        table_closing = _find_matching_brace(source, table_opening)
+        if table_closing is None:
+            continue
+        raw_values = _literal_string_array(source[table_opening + 1:table_closing])
+        if raw_values is None or len(raw_values) < 8:
+            continue
+        accessor = accessor_pattern.search(source, table_closing + 1)
+        if accessor is None or accessor.group("table") != table_match.group("name"):
+            continue
+
+        # Find the custom alphabet.  A real WAD decoder has a complete 0..63
+        # mapping and uses it in the decoder scope; partial maps are ignored.
+        candidates = re.finditer(r"\blocal\s+(?P<name>[A-Za-z_]\w*)\s*=\s*\{", source[accessor.end():])
+        mapping: dict[str, int] | None = None
+        mapping_start = mapping_end = -1
+        for candidate in candidates:
+            opening = accessor.end() + candidate.end() - 1
+            closing = _find_matching_brace(source, opening)
+            if closing is None:
+                continue
+            parsed = _string_int_map(source[opening + 1:closing])
+            if parsed and len(parsed) >= 64 and set(parsed.values()) == set(range(64)):
+                mapping = parsed
+                mapping_start, mapping_end = opening, closing
+                break
+        if mapping is None:
+            continue
+
+        shuffled = list(raw_values)
+        ranges = _wad_shuffle_ranges(source, accessor.end(), mapping_start, len(shuffled))
+        if not ranges:
+            continue
+        for left, right in ranges:
+            shuffled[left - 1:right] = reversed(shuffled[left - 1:right])
+        decoded = [_wad_b64_decode(value, mapping) for value in shuffled]
+        if any(value is None for value in decoded):
+            continue
+        decoded_values = [value for value in decoded if value is not None]
+
+        # A WAD v1 wrapper hands off to its flattened body with a
+        # ``return(function(...`` after the shuffle and custom-base64 loop.
+        # Once the table has been decoded statically, retaining those stages
+        # would decode it a second time at runtime.  Remove only this bounded
+        # bootstrap segment, leaving the VM body and lookup helper intact.
+        entry_pattern = re.compile(r"\breturn\s*\(\s*function\s*\(")
+        masked = _masked_lua_strings(source)
+        entry = entry_pattern.search(masked, mapping_end + 1)
+        if entry is None or entry.start() - accessor.end() > 500_000:
+            continue
+
+        decoded_body = ",\n    ".join(_lua_quote_wad_bytes(value) for value in decoded_values)
+        decoded_table = f"\nlocal {table_match.group('name')} = {{\n    {decoded_body}\n}}"
+        source = replace_ranges(source, [(table_match.start(), table_closing + 1, decoded_table)])
+
+        # The decoded table changes source offsets, so find the same helper
+        # again before removing the bootstrap.
+        refreshed = accessor_pattern.search(source, table_opening)
+        if refreshed is None or refreshed.group("function") != accessor.group("function"):
+            continue
+        refreshed_masked = _masked_lua_strings(source)
+        refreshed_entry = entry_pattern.search(refreshed_masked, refreshed.end())
+        if refreshed_entry is None or refreshed_entry.start() - refreshed.end() > 500_000:
+            continue
+        source = replace_ranges(
+            source,
+            [
+                (
+                    refreshed.end(),
+                    refreshed_entry.start(),
+                    "\n--[[ MoonWAD: statically decoded WAD string-table bootstrap removed. ]]\n",
+                )
+            ],
+        )
+
+        offset = int(accessor.group("offset"))
+        sign = 1 if accessor.group("operator") == "+" else -1
+        function_name = accessor.group("function")
+        # Do not mistake ``object.r(...)`` for the local lookup helper, but
+        # do allow Lua concatenation immediately before it: ``\"a\"..r(1)``.
+        call_pattern = re.compile(
+            rf"(?:(?<![\w.])|(?<=\.\.)){re.escape(function_name)}\s*\(\s*([+-]?\d+)\s*\)"
+        )
+        replacements = 0
+
+        def inline(match: re.Match[str]) -> str:
+            nonlocal replacements
+            index = int(match.group(1)) + sign * offset
+            if not 1 <= index <= len(decoded):
+                return match.group(0)
+            value = decoded[index - 1]
+            if value is None:
+                return match.group(0)
+            replacements += 1
+            return _lua_quote_wad_bytes(value)
+
+        source = call_pattern.sub(inline, source)
+        notes = [
+            f"decoded {len(decoded)} custom-base64 string-table entries",
+            f"replayed {len(ranges)} deterministic table shuffle range(s)",
+            "rewrote the table with recovered literals and removed its deterministic bootstrap",
+        ]
+        return source, PassResult("unpack_wearedevs_v1", replacements, notes)
+    return source, PassResult("unpack_wearedevs_v1", 0)
 
 
 def _parse_int_list(text: str) -> list[int] | None:
@@ -126,6 +542,12 @@ def fold_table_concat(source: str) -> tuple[str, PassResult]:
 
 def decode_simple_gsub_codecs(source: str) -> tuple[str, PassResult]:
     # Handles common per-byte wrappers, not full MoonSec VM devirtualization.
+    # The broad wrapper matcher is useful for compact decoder stubs but can
+    # backtrack heavily over a large flattened VM.  WAD's dedicated static
+    # pass runs before this, so cap this optional convenience pass rather than
+    # making a browser request appear stuck on multi-thousand-line sources.
+    if len(source) > 48_000:
+        return source, PassResult("decode_simple_gsub_codecs", 0)
     pattern = re.compile(
         r"(?P<lit>(?P<q>[\"'])(?:\\.|(?!\2).)*?\2)\s*:\s*gsub\s*\(\s*[\"']\.[\"']\s*,\s*function\s*\(\s*(?P<v>\w+)\s*\)\s*return\s+string\s*\.\s*char\s*\((?P<expr>.*?)\)\s*end\s*\)",
         re.S,
@@ -182,46 +604,11 @@ def inline_constant_table_lookups(source: str) -> tuple[str, PassResult]:
     table_pattern = re.compile(r"\blocal\s+(\w+)\s*=\s*\{([^{}]{1,200000})\}", re.S)
     tables: list[tuple[str, dict[int, str]]] = []
 
-    def split_fields(body: str) -> list[str]:
-        fields: list[str] = []
-        start = 0
-        i = 0
-        quote: str | None = None
-        escaped = False
-        paren = bracket = 0
-        while i < len(body):
-            ch = body[i]
-            if quote:
-                if ch == quote and not escaped:
-                    quote = None
-                if ch == "\\" and not escaped:
-                    escaped = True
-                else:
-                    escaped = False
-                i += 1
-                continue
-            if ch in "\"'":
-                quote = ch
-            elif ch == "(":
-                paren += 1
-            elif ch == ")" and paren:
-                paren -= 1
-            elif ch == "[":
-                bracket += 1
-            elif ch == "]" and bracket:
-                bracket -= 1
-            elif ch in ",;" and paren == 0 and bracket == 0:
-                fields.append(body[start:i].strip())
-                start = i + 1
-            i += 1
-        fields.append(body[start:].strip())
-        return fields
-
     for match in table_pattern.finditer(source):
         values: dict[int, str] = {}
         next_index = 1
         valid = True
-        for field in split_fields(match.group(2)):
+        for field in _split_lua_fields(match.group(2)):
             if not field:
                 continue
             index = next_index
@@ -265,8 +652,20 @@ def normalize(source: str) -> tuple[str, list[PassResult], list[str]]:
     results: list[PassResult] = []
     source, result, strings = decode_numeric_strings(source)
     results.append(result)
-    pipeline = [fold_string_char, fold_string_reverse, fold_table_concat, inline_constant_table_lookups, fold_literal_concats, decode_simple_gsub_codecs]
-    for _ in range(6):
+    pipeline = [
+        fold_numeric_expressions,
+        unpack_wearedevs_v1,
+        fold_string_char,
+        fold_string_reverse,
+        fold_table_concat,
+        inline_constant_table_lookups,
+        fold_literal_concats,
+        decode_simple_gsub_codecs,
+    ]
+    # Re-run every deterministic pass to a fixed point.  Later passes expose
+    # new literal calls (especially WAD's table lookup helper), so one round is
+    # not enough.  The cap prevents malformed input from consuming a session.
+    for _ in range(12):
         round_replacements = 0
         for fn in pipeline:
             source, result = fn(source)

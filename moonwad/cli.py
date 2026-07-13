@@ -25,6 +25,11 @@ def analyze_text(text: str, name: str) -> AnalysisResult:
     warnings: list[str] = []
     if detections and detections[0].name == "MoonSec V3":
         warnings.append("MoonSec V3 uses changing VM formats; unresolved dispatcher/bytecode is intentionally retained.")
+    if any(item.name == "WeAreDevs v1" for item in detections):
+        warnings.append(
+            "WeAreDevs v1: deobfuscated.lua statically recovers its string table and literal lookups. "
+            "Any remaining flattened VM dispatcher is retained for review."
+        )
     if len(text) > 5_000_000:
         warnings.append("Large source: some table extraction limits may truncate previews.")
     return AnalysisResult(
@@ -55,6 +60,10 @@ def write_result(result: AnalysisResult, out_dir: Path) -> Path:
         source_label = source_label[:-len(suffix)]
     target = out_dir / safe_name(source_label.replace("/", "__"))
     target.mkdir(parents=True, exist_ok=True)
+    # ``normalized.lua`` remains for scripts that used earlier MoonWAD
+    # releases.  ``deobfuscated.lua`` is the clearer user-facing name for the
+    # best static recovery and is what the web UI previews.
+    (target / "deobfuscated.lua").write_text(result.normalized_source, encoding="utf-8")
     (target / "normalized.lua").write_text(result.normalized_source, encoding="utf-8")
     (target / "strings.txt").write_text("\n".join(result.strings), encoding="utf-8")
     (target / "report.txt").write_text(text_report(result), encoding="utf-8")

@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from moonwad.cli import analyze_text, main, write_result
 from moonwad.github_fetch import normalize_github_file_url, parse_repo_url
+from moonwad.passes import normalize
 from moonwad.web import make_web_server
 
 
@@ -39,10 +40,35 @@ class MoonWADTests(unittest.TestCase):
         self.assertIn("WeAreDevs v1", names)
         self.assertTrue(any(url.startswith("https://raw.githubusercontent.com") for url in result.urls))
 
+    def test_wad_v1_static_string_table_unpack(self) -> None:
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        alphabet_map = ",".join(f'["{character}"]={index}' for index, character in enumerate(alphabet))
+        source = "\n".join(
+            [
+                "--[[ v1.0.0 https://wearedevs.net/obfuscator ]]",
+                "return(function(...) local l={\"d29ybGQ=\",\"SGVsbG8=\",\"QQ==\",\"Qg==\",\"Qw==\",\"RA==\",\"RQ==\",\"Rg==\"}",
+                "local function r(r)return l[r+1]end",
+                "for r,t in ipairs({{1;2}})do while t[1]<t[2]do l[t[1]],l[t[2]],t[1],t[2]=l[t[2]],l[t[1]],t[1]+1,t[2]-1 end end",
+                f"do local d={{{alphabet_map}}} end",
+                "return(function() return r(0)..r(1) end)() end)(...)",
+            ]
+        )
+        output, passes, _ = normalize(source)
+        wad_pass = next(item for item in passes if item.name == "unpack_wearedevs_v1")
+        self.assertEqual(wad_pass.replacements, 2)
+        self.assertIn('\"Helloworld\"', output)
+        self.assertNotIn("SGVsbG8=", output)
+        self.assertIn("WAD string-table bootstrap removed", output)
+
+    def test_numeric_parentheses_are_folded(self) -> None:
+        output, _, _ = normalize("local value=-1006551-(-1007150)")
+        self.assertIn("value=599", output)
+
     def test_output_files(self) -> None:
         result = analyze_text("print(string.char(65))", "tiny.lua")
         with tempfile.TemporaryDirectory() as tmp:
             target = write_result(result, Path(tmp))
+            self.assertTrue((target / "deobfuscated.lua").is_file())
             self.assertTrue((target / "normalized.lua").is_file())
             self.assertTrue((target / "report.json").is_file())
 
@@ -74,9 +100,10 @@ class MoonWADTests(unittest.TestCase):
                 response = json.loads(urlopen(request).read())
                 item = response["results"][0]
                 self.assertEqual(item["source"], "web.lua")
+                self.assertIn("deobfuscated.lua", item["files"])
                 self.assertIn("normalized.lua", item["files"])
-                normalized = urlopen(f"{base}{item['files']['normalized.lua']}").read().decode()
-                self.assertIn('"A"', normalized)
+                deobfuscated = urlopen(f"{base}{item['files']['deobfuscated.lua']}").read().decode()
+                self.assertIn('"A"', deobfuscated)
             finally:
                 server.shutdown()
                 server.server_close()

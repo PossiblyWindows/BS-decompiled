@@ -23,7 +23,7 @@ from .github_fetch import FetchError
 MAX_INPUT_BYTES = 12 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_INPUT_BYTES * 2 + 128 * 1024
 MAX_GUI_REMOTE_FILES = 50
-RESULT_FILES = ("normalized.lua", "strings.txt", "report.txt", "report.json")
+RESULT_FILES = ("deobfuscated.lua", "normalized.lua", "strings.txt", "report.txt", "report.json")
 
 
 WEB_PAGE = r"""<!doctype html>
@@ -40,7 +40,7 @@ WEB_PAGE = r"""<!doctype html>
     label { display:block; font-weight:650; margin:12px 0 7px; } input[type=file], input[type=url], input[type=number], textarea { display:block; width:100%; color:inherit; background:#0f1520; border:1px solid #344055; border-radius:9px; padding:10px; font:inherit; }
     textarea { min-height:180px; resize:vertical; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:13px; } .row { display:flex; gap:16px; align-items:end; flex-wrap:wrap; } .row > * { flex:1 1 230px; } .check { display:flex; gap:8px; align-items:center; margin-top:13px; color:var(--muted); font-weight:500; }
     button { appearance:none; border:0; border-radius:9px; padding:11px 15px; color:#07111f; background:var(--accent); font:700 15px system-ui,sans-serif; cursor:pointer; margin-top:18px; } button:disabled { cursor:wait; opacity:.62; } .hint, .safe { color:var(--muted); font-size:13px; } .safe { border-left:3px solid var(--ok); padding-left:10px; }
-    #status { min-height:25px; font-weight:600; } #status.error { color:#ff9696; } #status.ok { color:var(--ok); } .result { border-top:1px solid var(--line); padding:15px 0 2px; } .result:first-child { border-top:0; padding-top:0; } .pills { display:flex; flex-wrap:wrap; gap:7px; margin:8px 0; } .pill { padding:2px 8px; border:1px solid #3d4b62; border-radius:99px; color:#c5d3e6; font-size:12px; } .warn { color:var(--warn); } a { color:var(--accent); } code { color:#d7e6ff; }
+    #status { min-height:25px; font-weight:600; } #status.error { color:#ff9696; } #status.ok { color:var(--ok); } .result { border-top:1px solid var(--line); padding:15px 0 2px; } .result:first-child { border-top:0; padding-top:0; } .pills { display:flex; flex-wrap:wrap; gap:7px; margin:8px 0; } .pill { padding:2px 8px; border:1px solid #3d4b62; border-radius:99px; color:#c5d3e6; font-size:12px; } .warn { color:var(--warn); } a { color:var(--accent); } code { color:#d7e6ff; } details { margin-top:12px; } summary { cursor:pointer; color:#d7e6ff; font-weight:650; } .code-preview { max-height:520px; overflow:auto; margin:8px 0 0; padding:12px; white-space:pre; border:1px solid #344055; border-radius:9px; background:#0b1019; color:#d7e6ff; font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
   </style>
 </head>
 <body>
@@ -77,6 +77,14 @@ const byId = id => document.getElementById(id);
 const status = byId('status'); const results = byId('results'); const button = byId('analyze');
 function addText(parent, tag, value, cls) { const el=document.createElement(tag); el.textContent=value; if(cls) el.className=cls; parent.appendChild(el); return el; }
 function addLink(parent, label, href) { const a=document.createElement('a'); a.textContent=label; a.href=href; a.target='_blank'; a.rel='noopener'; parent.appendChild(a); }
+async function addRecoveredPreview(parent, files) {
+  const href=files['deobfuscated.lua'] || files['normalized.lua']; if(!href) return;
+  const details=document.createElement('details'); details.open=true;
+  addText(details,'summary','Recovered static Lua (deobfuscated.lua)');
+  const pre=addText(details,'pre','Loading recovered source…','code-preview'); parent.appendChild(details);
+  try { const response=await fetch(href); if(!response.ok) throw new Error('Could not load recovered source'); pre.textContent=await response.text(); }
+  catch(error) { pre.textContent=error.message || String(error); }
+}
 function render(data) {
   results.replaceChildren();
   for (const item of data.results || []) {
@@ -88,7 +96,7 @@ function render(data) {
     for(const warning of (item.warnings || [])) addText(box,'p',warning,'warn');
     const links=document.createElement('p');
     for(const [label, href] of Object.entries(item.files || {})) { addLink(links,label,href); links.appendChild(document.createTextNode(' · ')); }
-    box.appendChild(links); results.appendChild(box);
+    box.appendChild(links); void addRecoveredPreview(box,item.files || {}); results.appendChild(box);
   }
 }
 button.addEventListener('click', async () => {
@@ -192,7 +200,7 @@ def analyze_web_payload(payload: dict[str, Any], out_dir: Path, store: ResultSto
 
 
 class MoonWADWebHandler(BaseHTTPRequestHandler):
-    server_version = "MoonWADLocal/0.4"
+    server_version = "MoonWADLocal/0.4.1"
 
     def __init__(self, *args: Any, out_dir: Path, store: ResultStore, **kwargs: Any) -> None:
         self.out_dir = out_dir
