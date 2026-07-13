@@ -262,7 +262,14 @@ def make_web_server(out_dir: Path, port: int = 8765) -> LocalMoonWADServer:
 
 def serve_web(out_dir: Path, port: int = 8765, open_browser: bool = True) -> int:
     """Run MoonWAD's local web UI until Ctrl+C is pressed."""
-    server = make_web_server(out_dir, port)
+    try:
+        server = make_web_server(out_dir, port)
+    except OSError:
+        if port != 8765:
+            raise
+        # The convenient default should not fail just because a previous local
+        # MoonWAD window is still open; ask the OS for an unused loopback port.
+        server = make_web_server(out_dir, 0)
     actual_port = int(server.server_address[1])
     address = f"http://127.0.0.1:{actual_port}/"
     print(f"MoonWAD local web UI: {address}")
