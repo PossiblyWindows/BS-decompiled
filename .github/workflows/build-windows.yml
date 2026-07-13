@@ -1,0 +1,30 @@
+name: Build Windows executable
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['**']
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build executables
+        shell: pwsh
+        run: .\pc\build-windows.ps1
+      - name: Test analyzer
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Upload Windows executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoonWAD-windows
+          path: dist/*.exe
+          if-no-files-found: error

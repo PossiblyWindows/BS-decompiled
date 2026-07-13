@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+moonwad-output/
+build/
+dist/
+*.spec
+vendor/*
+!vendor/.gitkeep
