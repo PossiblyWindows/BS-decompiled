@@ -168,14 +168,21 @@ call "$BinDir\moonwad.cmd" --web %*
     if (-not $NoPath) {
         $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
         $PathParts = @($UserPath -split ';' | Where-Object { $_ })
-        if ($PathParts -notcontains $BinDir) {
-            $NewUserPath = (($PathParts + $BinDir) -join ';')
+        $NormalizedBinDir = $BinDir.TrimEnd('\\')
+        # Keep MoonWAD ahead of a same-named `moonwad` command installed by
+        # pip in Python\Scripts.  The previous installer only appended this
+        # folder, which could leave the old pip command winning command lookup.
+        $OtherPathParts = @($PathParts | Where-Object { $_.TrimEnd('\\') -ine $NormalizedBinDir })
+        $NewUserPath = ((@($BinDir) + $OtherPathParts) -join ';')
+        if ($UserPath -ne $NewUserPath) {
             [Environment]::SetEnvironmentVariable('Path', $NewUserPath, 'User')
-            $env:Path = $BinDir + ';' + $env:Path
-            Write-Host 'Added MoonWAD to your user PATH. New terminals will also see the command.'
+            Write-Host 'Placed MoonWAD first in your user PATH. New terminals will use this installed command before pip commands.'
         } else {
-            Write-Host 'MoonWAD command folder is already in your user PATH.'
+            Write-Host 'MoonWAD command folder is already first in your user PATH.'
         }
+        $CurrentPathParts = @($env:Path -split ';' | Where-Object { $_ -and $_.TrimEnd('\\') -ine $NormalizedBinDir })
+        $env:Path = ((@($BinDir) + $CurrentPathParts) -join ';')
+        Write-Host 'Placed MoonWAD first in this PowerShell session too.'
     } else {
         Write-Host 'Skipped PATH changes because -NoPath was supplied.'
     }

@@ -124,6 +124,10 @@ Use `moonwad` (or `moonwad-cli`) after installation. If you run an older
 `MoonWAD-CLI.exe` copied into the same directory as your Lua file, Windows may
 prefer that old EXE over the fresh PATH command.
 
+The installer also puts its command folder before Python's `Scripts` folder in
+your user PATH, so a previously installed pip package named `moonwad` does not
+win command lookup.
+
 The `pc/` folder contains a source launcher and an executable build script.
 `MoonWAD.exe` starts the web UI by default, while `MoonWAD-CLI.exe` is the
 console version. GitHub Actions builds both on Windows and publishes the

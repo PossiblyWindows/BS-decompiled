@@ -252,7 +252,7 @@ def analyze_web_payload(payload: dict[str, Any], out_dir: Path, store: ResultSto
 
 
 class MoonWADWebHandler(BaseHTTPRequestHandler):
-    server_version = "MoonWADLocal/0.7.3"
+    server_version = "MoonWADLocal/0.7.4"
 
     def __init__(self, *args: Any, out_dir: Path, store: ResultStore, **kwargs: Any) -> None:
         self.out_dir = out_dir
