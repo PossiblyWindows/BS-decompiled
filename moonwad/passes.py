@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import base64
 import binascii
+from collections import Counter
 import math
 import re
 from typing import Callable
@@ -446,6 +447,165 @@ def unpack_wearedevs_v1(source: str) -> tuple[str, PassResult]:
         ]
         return source, PassResult("unpack_wearedevs_v1", replacements, notes)
     return source, PassResult("unpack_wearedevs_v1", 0)
+
+
+_VM_NATIVE_NAMES = frozenset(
+    {
+        "assert",
+        "byte",
+        "char",
+        "concat",
+        "error",
+        "floor",
+        "gmatch",
+        "gsub",
+        "ipairs",
+        "len",
+        "math",
+        "next",
+        "pairs",
+        "pcall",
+        "print",
+        "random",
+        "remove",
+        "select",
+        "setmetatable",
+        "string",
+        "table",
+        "tonumber",
+        "tostring",
+        "type",
+        "unpack",
+    }
+)
+_VM_INTEGRITY_TERMS = frozenset({"Tamper Detected!", "__gc", "__index", "__len", "__metatable"})
+
+
+def extract_flattened_vm_map(source: str) -> dict[str, object] | None:
+    """Describe a flattened Lua state dispatcher without executing it.
+
+    This is deliberately a structural dumper, not a runtime hook: it finds a
+    ``while <pc> do`` dispatcher, its numeric program-counter writes, the
+    comparison pivots, and statically visible native APIs.  The resulting map
+    makes VM-wrapped output navigable while avoiding claims that an arbitrary
+    custom VM has been fully decompiled.
+    """
+    masked = _masked_lua_strings(source)
+    loop_pattern = re.compile(r"\bwhile\s+(?P<state>[A-Za-z_]\w*)\s+do\b")
+    best: tuple[int, re.Match[str], list[int], list[int], int] | None = None
+
+    for loop in loop_pattern.finditer(masked):
+        state = loop.group("state")
+        # A flattened dispatcher is normally one large function.  Looking at
+        # the next MiB keeps the static scan bounded for browser submissions.
+        end = min(len(masked), loop.end() + 1_000_000)
+        region = masked[loop.end():end]
+        guards = [
+            int(value)
+            for value in re.findall(rf"\b(?:if|elseif)\s+{re.escape(state)}\s*<\s*(-?\d+)\s*then", region)
+        ]
+        assigned = [
+            int(value)
+            for value in re.findall(rf"\b{re.escape(state)}\s*=\s*(-?\d+)\b", region)
+        ]
+        unique_states = sorted(set(assigned))
+        # Normal loops may use a counter, but a VM has several numeric branch
+        # pivots and multiple distinct jumps.  Require both signals.
+        if len(guards) < 3 or len(unique_states) < 3:
+            continue
+        score = len(guards) * 3 + len(unique_states)
+        if best is None or score > best[0]:
+            best = (score, loop, unique_states, sorted(set(guards)), end)
+
+    if best is None:
+        return None
+
+    _, loop, state_values, guard_thresholds, end = best
+    state = loop.group("state")
+    region = masked[loop.start():end]
+    indexed = Counter(re.findall(r"\b([A-Za-z_]\w*)\s*\[", region))
+    indexed_values = [
+        {"name": name, "accesses": count}
+        for name, count in indexed.most_common(8)
+        if name != state and count >= 3
+    ]
+    literal_values = {token.value for token in scan_lua_strings(source)}
+    native_symbols = sorted(literal_values & _VM_NATIVE_NAMES)
+    integrity_terms = sorted(literal_values & _VM_INTEGRITY_TERMS)
+
+    return {
+        "kind": "flattened_state_dispatcher",
+        "program_counter": state,
+        "loop_offset": loop.start(),
+        "numeric_state_assignment_count": len(
+            re.findall(rf"\b{re.escape(state)}\s*=\s*(-?\d+)\b", region)
+        ),
+        "numeric_state_values": state_values[:256],
+        "numeric_state_values_truncated": len(state_values) > 256,
+        "state_guard_count": len(guard_thresholds),
+        "state_guard_thresholds": guard_thresholds[:256],
+        "state_guard_thresholds_truncated": len(guard_thresholds) > 256,
+        "frequent_indexed_values": indexed_values,
+        "native_symbols": native_symbols,
+        "integrity_related_terms": integrity_terms,
+        "notes": [
+            "Static structure only: analyzed source was not executed.",
+            "Numeric state writes are potential control-flow targets, not proven original source lines.",
+            "No standalone opcode/bytecode table was statically identified in this dispatcher.",
+        ],
+    }
+
+
+def flattened_vm_map_text(vm_map: dict[str, object]) -> str:
+    """Render the static VM map in a short, readable text form."""
+    def values(label: str, raw: object, per_line: int = 8) -> list[str]:
+        items = [str(item) for item in raw] if isinstance(raw, list) else []
+        if not items:
+            return [f"{label}: none"]
+        lines = [f"{label}:"]
+        for offset in range(0, len(items), per_line):
+            lines.append("  " + ", ".join(items[offset:offset + per_line]))
+        return lines
+
+    pc = str(vm_map.get("program_counter", "unknown"))
+    lines = [
+        "MoonWAD static VM map",
+        "=" * 24,
+        "Safety: this is a static dump; the Lua/Luau source was not executed.",
+        f"Dispatcher kind: {vm_map.get('kind', 'unknown')}",
+        f"Program-counter variable: {pc}",
+        f"Numeric program-counter writes: {vm_map.get('numeric_state_assignment_count', 0)}",
+        f"Comparison pivots: {vm_map.get('state_guard_count', 0)}",
+        "",
+    ]
+    lines.extend(values("Potential state values", vm_map.get("numeric_state_values")))
+    if vm_map.get("numeric_state_values_truncated"):
+        lines.append("  … truncated after 256 values")
+    lines.append("")
+    lines.extend(values("Dispatcher comparison pivots", vm_map.get("state_guard_thresholds")))
+    if vm_map.get("state_guard_thresholds_truncated"):
+        lines.append("  … truncated after 256 values")
+
+    indexed = vm_map.get("frequent_indexed_values")
+    if isinstance(indexed, list) and indexed:
+        lines.extend(["", "Frequently indexed values:"])
+        for item in indexed:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('name')}: {item.get('accesses')} access(es)")
+    lines.append("")
+    lines.extend(values("Statically visible native/API names", vm_map.get("native_symbols")))
+    lines.extend(values("Integrity/metatable terms", vm_map.get("integrity_related_terms")))
+    lines.extend(
+        [
+            "",
+            "How to read it:",
+            f"- Search the recovered Lua for `{pc}=<number>` to jump between flattened states.",
+            "- The values above are a navigation map, not a fake claim of a full source-level decompile.",
+            "- Dynamic calls and opaque byte strings remain unresolved unless a matching static VM format is implemented.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _parse_int_list(text: str) -> list[int] | None:

@@ -12,7 +12,16 @@ from .detect import detect
 from .external_engines import ExternalEngineError, run_moonsec_v2_reference, run_moonsec_v3_reference, run_prometheus_static
 from .github_fetch import FetchError, FetchedSource, discover_github_urls, fetch_repository, fetch_single, parse_repo_url
 from .models import AnalysisResult
-from .passes import base64_candidates, extract_constant_tables, extract_payloads, extract_require_ids, extract_urls, normalize
+from .passes import (
+    base64_candidates,
+    extract_constant_tables,
+    extract_flattened_vm_map,
+    extract_payloads,
+    extract_require_ids,
+    extract_urls,
+    flattened_vm_map_text,
+    normalize,
+)
 from .report import text_report
 
 
@@ -23,12 +32,19 @@ def analyze_text(text: str, name: str) -> AnalysisResult:
     normalized, passes, strings = normalize(text)
     detections = detect(text)
     warnings: list[str] = []
+    metadata: dict[str, object] = {}
     if detections and detections[0].name == "MoonSec V3":
         warnings.append("MoonSec V3 uses changing VM formats; unresolved dispatcher/bytecode is intentionally retained.")
     if any(item.name == "WeAreDevs v1" for item in detections):
         warnings.append(
             "WeAreDevs v1: deobfuscated.lua statically recovers its string table and literal lookups. "
             "Any remaining flattened VM dispatcher is retained for review."
+        )
+    flattened_vm = extract_flattened_vm_map(normalized)
+    if flattened_vm:
+        metadata["flattened_vm"] = flattened_vm
+        warnings.append(
+            "Flattened VM dispatcher detected. MoonWAD wrote vm-map.txt and vm-map.json as a static navigation dump; it did not execute the source."
         )
     if len(text) > 5_000_000:
         warnings.append("Large source: some table extraction limits may truncate previews.")
@@ -45,6 +61,7 @@ def analyze_text(text: str, name: str) -> AnalysisResult:
         base64_candidates=base64_candidates(strings),
         constant_tables=extract_constant_tables(normalized),
         warnings=warnings,
+        metadata=metadata,
     )
 
 
@@ -68,6 +85,10 @@ def write_result(result: AnalysisResult, out_dir: Path) -> Path:
     (target / "strings.txt").write_text("\n".join(result.strings), encoding="utf-8")
     (target / "report.txt").write_text(text_report(result), encoding="utf-8")
     (target / "report.json").write_text(json.dumps(result.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+    flattened_vm = result.metadata.get("flattened_vm")
+    if isinstance(flattened_vm, dict):
+        (target / "vm-map.txt").write_text(flattened_vm_map_text(flattened_vm), encoding="utf-8")
+        (target / "vm-map.json").write_text(json.dumps(flattened_vm, indent=2, ensure_ascii=False), encoding="utf-8")
     if result.payloads:
         payload_dir = target / "payloads"
         payload_dir.mkdir(exist_ok=True)

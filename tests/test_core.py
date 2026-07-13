@@ -10,11 +10,30 @@ from unittest.mock import patch
 
 from moonwad.cli import analyze_text, main, write_result
 from moonwad.github_fetch import normalize_github_file_url, parse_repo_url
-from moonwad.passes import normalize
+from moonwad.passes import extract_flattened_vm_map, flattened_vm_map_text, normalize
 from moonwad.web import make_web_server
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+FLATTENED_VM = """
+local function run(M)
+    local z = {}
+    while M do
+        if M < 10 then
+            z[1] = "pcall"
+            M = 20
+        elseif M < 30 then
+            z[2] = "Tamper Detected!"
+            M = 40
+        elseif M < 50 then
+            M = 0
+        else
+            M = 0
+        end
+    end
+end
+"""
 
 
 class MoonWADTests(unittest.TestCase):
@@ -64,6 +83,24 @@ class MoonWADTests(unittest.TestCase):
         output, _, _ = normalize("local value=-1006551-(-1007150)")
         self.assertIn("value=599", output)
 
+    def test_flattened_vm_static_map(self) -> None:
+        vm_map = extract_flattened_vm_map(FLATTENED_VM)
+        self.assertIsNotNone(vm_map)
+        assert vm_map is not None
+        self.assertEqual(vm_map["program_counter"], "M")
+        self.assertIn(20, vm_map["numeric_state_values"])
+        self.assertIn("pcall", vm_map["native_symbols"])
+        self.assertIn("Tamper Detected!", vm_map["integrity_related_terms"])
+        self.assertIn("Program-counter variable: M", flattened_vm_map_text(vm_map))
+
+    def test_vm_map_output_files(self) -> None:
+        result = analyze_text(FLATTENED_VM, "vm.lua")
+        self.assertIn("flattened_vm", result.metadata)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = write_result(result, Path(tmp))
+            self.assertTrue((target / "vm-map.txt").is_file())
+            self.assertTrue((target / "vm-map.json").is_file())
+
     def test_output_files(self) -> None:
         result = analyze_text("print(string.char(65))", "tiny.lua")
         with tempfile.TemporaryDirectory() as tmp:
@@ -104,6 +141,28 @@ class MoonWADTests(unittest.TestCase):
                 self.assertIn("normalized.lua", item["files"])
                 deobfuscated = urlopen(f"{base}{item['files']['deobfuscated.lua']}").read().decode()
                 self.assertIn('"A"', deobfuscated)
+            finally:
+                server.shutdown()
+                server.server_close()
+                worker.join(timeout=2)
+
+    def test_web_exposes_static_vm_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = make_web_server(Path(tmp), port=0)
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                request = Request(
+                    f"{base}/api/analyze",
+                    data=json.dumps({"name": "vm.lua", "text": FLATTENED_VM}).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                item = json.loads(urlopen(request).read())["results"][0]
+                self.assertIn("vm-map.txt", item["files"])
+                vm_text = urlopen(f"{base}{item['files']['vm-map.txt']}").read().decode()
+                self.assertIn("Program-counter variable: M", vm_text)
             finally:
                 server.shutdown()
                 server.server_close()

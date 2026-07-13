@@ -5,6 +5,7 @@ A static Lua/Luau analysis and normalization toolkit for:
 - MoonSec V2 and V3 signatures and common packing layers
 - Prometheus-style constant arrays and wrappers
 - WeAreDevs v1 loaders, including static custom-base64 string-table recovery
+- flattened VM structure maps: program-counter values, dispatcher pivots, native APIs, and integrity markers
 - GitHub/raw loader chains and repository source trees
 - numeric/hex Lua escapes, `string.char`, literal concatenation, `table.concat`, `string.reverse`, and simple per-byte `gsub` codecs
 - URLs, Roblox `require(...)` IDs, literal `load`/`loadstring` payloads, base64 candidates, and constant-table inventories
@@ -88,10 +89,20 @@ Results are written under `moonwad-output/<source>/`:
 
 - `deobfuscated.lua` — best static recovery; the web UI displays this inline
 - `normalized.lua` — legacy-compatible copy of the same recovered output
+- `vm-map.txt` and `vm-map.json` when a flattened dispatcher is found
 - `strings.txt`
 - `report.txt`
 - `report.json`
 - `payloads/*.lua` when literal nested payloads are found
+
+## Flattened VM maps
+
+When MoonWAD finds a dispatcher shaped like `while pc do` with many numeric
+`pc` jumps, it writes a static VM map and displays it above the recovered Lua
+in the web UI. It is a navigation/dump aid: it identifies the state variable,
+possible state values, comparison pivots, frequently indexed values, visible
+Lua APIs, and metatable/integrity markers. It never runs the target script and
+does not pretend a custom VM has been fully restored to original source.
 
 ## Optional pinned reference engines
 

@@ -23,7 +23,7 @@ from .github_fetch import FetchError
 MAX_INPUT_BYTES = 12 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_INPUT_BYTES * 2 + 128 * 1024
 MAX_GUI_REMOTE_FILES = 50
-RESULT_FILES = ("deobfuscated.lua", "normalized.lua", "strings.txt", "report.txt", "report.json")
+RESULT_FILES = ("deobfuscated.lua", "normalized.lua", "vm-map.txt", "vm-map.json", "strings.txt", "report.txt", "report.json")
 
 
 WEB_PAGE = r"""<!doctype html>
@@ -77,13 +77,18 @@ const byId = id => document.getElementById(id);
 const status = byId('status'); const results = byId('results'); const button = byId('analyze');
 function addText(parent, tag, value, cls) { const el=document.createElement(tag); el.textContent=value; if(cls) el.className=cls; parent.appendChild(el); return el; }
 function addLink(parent, label, href) { const a=document.createElement('a'); a.textContent=label; a.href=href; a.target='_blank'; a.rel='noopener'; parent.appendChild(a); }
-async function addRecoveredPreview(parent, files) {
-  const href=files['deobfuscated.lua'] || files['normalized.lua']; if(!href) return;
-  const details=document.createElement('details'); details.open=true;
-  addText(details,'summary','Recovered static Lua (deobfuscated.lua)');
+async function addTextPreview(parent, label, href, open) {
+  if(!href) return;
+  const details=document.createElement('details'); details.open=open;
+  addText(details,'summary',label);
   const pre=addText(details,'pre','Loading recovered source…','code-preview'); parent.appendChild(details);
   try { const response=await fetch(href); if(!response.ok) throw new Error('Could not load recovered source'); pre.textContent=await response.text(); }
   catch(error) { pre.textContent=error.message || String(error); }
+}
+function addRecoveredPreview(parent, files) {
+  if(files['vm-map.txt']) void addTextPreview(parent,'Static VM map (no Lua executed)',files['vm-map.txt'],true);
+  const recovered=files['deobfuscated.lua'] || files['normalized.lua'];
+  if(recovered) void addTextPreview(parent,'Recovered static Lua (deobfuscated.lua)',recovered,true);
 }
 function render(data) {
   results.replaceChildren();
@@ -200,7 +205,7 @@ def analyze_web_payload(payload: dict[str, Any], out_dir: Path, store: ResultSto
 
 
 class MoonWADWebHandler(BaseHTTPRequestHandler):
-    server_version = "MoonWADLocal/0.4.1"
+    server_version = "MoonWADLocal/0.5.0"
 
     def __init__(self, *args: Any, out_dir: Path, store: ResultStore, **kwargs: Any) -> None:
         self.out_dir = out_dir
