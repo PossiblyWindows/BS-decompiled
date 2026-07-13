@@ -1,13 +1,19 @@
-"""Small, explicit GitHub update check for MoonWAD.
+"""Explicit update checking and installed-launcher handoff for MoonWAD.
 
 The checker only downloads this project's version file from a fixed raw-GitHub
-URL.  It never downloads, installs, or runs an update automatically.
+URL. Installing is a separate user action: it can launch only the fixed,
+locally installed MoonWAD updater for Windows or Termux. No URL or command is
+accepted from the analyzed Lua/Luau source or the browser page.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+import os
+from pathlib import Path
 import re
+import subprocess
+import sys
 import urllib.error
 import urllib.request
 
@@ -42,6 +48,49 @@ def _fetch_latest_version() -> str:
     return match.group("version")
 
 
+def installed_updater() -> tuple[list[str] | None, str]:
+    """Return a fixed updater command only for a supported installed copy.
+
+    This deliberately does not search PATH for arbitrary commands. The
+    Windows installer marks its wrapper with ``MOONWAD_INSTALLED=1`` and the
+    Termux installer has a fixed updater path below ``$PREFIX/bin``.
+    """
+    if sys.platform == "win32":
+        script = Path(__file__).resolve().parent.parent / "scripts" / "install-windows.ps1"
+        if os.environ.get("MOONWAD_INSTALLED") == "1" and script.is_file():
+            return (
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Update"],
+                "The Windows updater will open a separate console with detailed install logs.",
+            )
+        return None, "Automatic Windows update is available after installing MoonWAD with scripts/install-windows.ps1."
+
+    prefix = os.environ.get("PREFIX", "").strip()
+    termux_updater = Path(prefix) / "bin" / "moonwad-update" if prefix else None
+    if termux_updater and termux_updater.is_file():
+        return [str(termux_updater)], "The Termux updater will print detailed install logs in its terminal."
+    return None, "Automatic install is available from the MoonWAD Windows or Termux installer; this copy can still be updated manually from GitHub."
+
+
+def launch_installed_updater() -> dict[str, object]:
+    """Launch the fixed updater after an explicit user action.
+
+    The target Lua/Luau is never involved: the command is derived solely from
+    this installed package and platform. A Windows update gets its own console
+    so a GUI launch does not hide the installer output.
+    """
+    command, hint = installed_updater()
+    if command is None:
+        return {"started": False, "message": hint}
+    try:
+        options: dict[str, object] = {}
+        if sys.platform == "win32":
+            options["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        process = subprocess.Popen(command, **options)
+    except OSError as exc:
+        return {"started": False, "message": f"Could not start the installed updater: {exc}"}
+    return {"started": True, "pid": process.pid, "message": hint}
+
+
 def check_for_update(fetch_latest: Callable[[], str] | None = None) -> dict[str, object]:
     """Return update information without changing the local installation."""
     latest: str | None = None
@@ -57,11 +106,14 @@ def check_for_update(fetch_latest: Callable[[], str] | None = None) -> dict[str,
         available = False
         error = str(exc)
 
+    command, install_hint = installed_updater()
     return {
         "current_version": __version__,
         "latest_version": latest,
         "update_available": available,
         "project_url": UPDATE_PAGE_URL,
+        "install_available": command is not None,
+        "install_hint": install_hint,
         "error": error,
     }
 
@@ -73,5 +125,6 @@ def update_status_text(status: dict[str, object]) -> str:
     if status.get("error"):
         return f"MoonWAD {current}; update check unavailable: {status['error']}"
     if status.get("update_available"):
-        return f"Update available: MoonWAD {latest} (installed: {current})\n{status['project_url']}"
+        install_hint = str(status.get("install_hint", ""))
+        return f"Update available: MoonWAD {latest} (installed: {current})\n{install_hint}\n{status['project_url']}"
     return f"MoonWAD {current} is up to date." if latest == current else f"MoonWAD {current}; GitHub reports {latest}."

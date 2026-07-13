@@ -24,9 +24,10 @@ moonwad --web
 The server only listens on `127.0.0.1`, prints its local URL, and opens a
 browser when one is available. Use `--no-browser` to only print the link or
 `--web-port 0` to choose a free port. The GUI can analyze a local file, pasted
-source, or public GitHub/raw URL. It never executes submitted Lua/Luau. Use
-the **Check for updates** button to compare the installed version with the
-fixed MoonWAD GitHub branch; it never installs anything automatically.
+source, or public GitHub/raw URL. It never executes submitted Lua/Luau. The
+**Check for updates** button compares the installed version with the fixed
+MoonWAD GitHub branch. Install/update commands are provided below for both PC
+and Termux.
 
 CLI equivalent:
 
@@ -34,15 +35,43 @@ CLI equivalent:
 moonwad --check-update
 ```
 
-## Alpha literal trace
+## Alpha static output trace
 
 For tiny harmless examples such as `print("hello")`, use `--alpha` or tick
-**Alpha literal trace** in the web UI. MoonWAD writes `alpha-trace.txt` and
-`alpha-trace.json` with the provable literal output. It is intentionally not a
-Lua runtime: it rejects variables, functions, loops, loaders, HTTP, globals,
-and all non-literal calls rather than executing them.
+**Alpha static output trace** in the web UI. MoonWAD writes `alpha-trace.txt`
+and `alpha-trace.json` with the provable literal output and a chronological
+trace log. It is intentionally not a Lua runtime: it does not run variables,
+functions, loops, loaders, HTTP, globals, or VM dispatchers. If a WAD wrapper
+hides `print("hello")` inside its flattened VM, the trace report says so
+explicitly instead of pretending the VM ran.
 
 ## PC / Windows
+
+### Easy per-user install and update
+
+The Windows installer needs Python 3.10+ but does not need Git or administrator
+rights. It downloads the fixed `moonwad` branch into
+`%LOCALAPPDATA%\MoonWAD`, creates `moonwad`, `moonwad-web`, and
+`moonwad-update` commands, adds them to your user `PATH`, and runs the full
+self-test with verbose step-by-step output.
+
+In PowerShell, download the installer to a file first (so it can be inspected)
+and run it:
+
+```powershell
+$installer = Join-Path $env:TEMP 'MoonWAD-install.ps1'
+Invoke-WebRequest 'https://raw.githubusercontent.com/PossiblyWindows/BS-decompiled/moonwad/scripts/install-windows.ps1' -OutFile $installer
+powershell -NoProfile -ExecutionPolicy Bypass -File $installer
+```
+
+If Python is missing, the installer stops before downloading the app and prints
+the exact optional `winget` command to install Python. Later, open a new
+terminal and run:
+
+```powershell
+moonwad --web
+moonwad-update
+```
 
 The `pc/` folder contains a source launcher and an executable build script.
 `MoonWAD.exe` starts the web UI by default, while `MoonWAD-CLI.exe` is the
@@ -121,7 +150,7 @@ Results are written under `moonwad-output/<source>/`:
 - `deobfuscated.lua` — best static recovery; the web UI displays this inline
 - `normalized.lua` — legacy-compatible copy of the same recovered output
 - `vm-map.txt` and `vm-map.json` when a flattened dispatcher is found
-- `alpha-trace.txt` and `alpha-trace.json` when Alpha literal trace is selected
+- `alpha-trace.txt` and `alpha-trace.json` when Alpha static output trace is selected
 - `strings.txt`
 - `report.txt`
 - `report.json`

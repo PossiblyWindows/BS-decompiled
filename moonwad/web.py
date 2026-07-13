@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlsplit
 import webbrowser
 
 from .github_fetch import FetchError
-from .updates import check_for_update
+from .updates import check_for_update, launch_installed_updater
 
 
 MAX_INPUT_BYTES = 12 * 1024 * 1024
@@ -58,7 +58,7 @@ WEB_PAGE = r"""<!doctype html>
 <main>
   <h1>Moon<span>WAD</span></h1>
   <p class="lede">Local, static Lua/Luau analysis for common MoonSec, Prometheus, and WeAreDevs packing layers.</p>
-  <button id="check-update" class="secondary" type="button">Check for updates</button><span id="update-status" class="hint"></span>
+  <button id="check-update" class="secondary" type="button">Check for updates</button><button id="install-update" class="secondary" type="button" hidden>Install update</button><span id="update-status" class="hint"></span>
   <section class="card">
     <p class="safe">This page is served only from your device. MoonWAD never runs the Lua/Luau you submit.</p>
     <label for="file">Choose a local Lua/Luau/text file</label>
@@ -77,7 +77,7 @@ WEB_PAGE = r"""<!doctype html>
         <label class="check"><input id="recursive" type="checkbox"> Follow GitHub links found in the loader</label>
       </div>
     </div>
-    <label class="check"><input id="alpha" type="checkbox"> Alpha literal trace: dump only direct literal <code>print</code>/<code>warn</code> output; never execute Lua</label>
+    <label class="check"><input id="alpha" type="checkbox"> Alpha static output trace: show provable direct literal <code>print</code>/<code>warn</code> output and a verbose trace log; never execute Lua</label>
     <button id="analyze">Analyze safely</button>
   </section>
   <section class="card">
@@ -87,7 +87,7 @@ WEB_PAGE = r"""<!doctype html>
 </main>
 <script>
 const byId = id => document.getElementById(id);
-const status = byId('status'); const results = byId('results'); const button = byId('analyze'); const updateButton=byId('check-update'); const updateStatus=byId('update-status');
+const status = byId('status'); const results = byId('results'); const button = byId('analyze'); const updateButton=byId('check-update'); const installButton=byId('install-update'); const updateStatus=byId('update-status');
 function addText(parent, tag, value, cls) { const el=document.createElement(tag); el.textContent=value; if(cls) el.className=cls; parent.appendChild(el); return el; }
 function addLink(parent, label, href) { const a=document.createElement('a'); a.textContent=label; a.href=href; a.target='_blank'; a.rel='noopener'; parent.appendChild(a); }
 async function addTextPreview(parent, label, href, open) {
@@ -99,10 +99,10 @@ async function addTextPreview(parent, label, href, open) {
   catch(error) { pre.textContent=error.message || String(error); }
 }
 function addRecoveredPreview(parent, files) {
-  if(files['vm-map.txt']) void addTextPreview(parent,'Static VM map (no Lua executed)',files['vm-map.txt'],true);
-  if(files['alpha-trace.txt']) void addTextPreview(parent,'Alpha literal trace (no Lua executed)',files['alpha-trace.txt'],true);
   const recovered=files['deobfuscated.lua'] || files['normalized.lua'];
   if(recovered) void addTextPreview(parent,'Recovered static Lua (deobfuscated.lua)',recovered,true);
+  if(files['vm-map.txt']) void addTextPreview(parent,'Static VM map (no Lua executed)',files['vm-map.txt'],true);
+  if(files['alpha-trace.txt']) void addTextPreview(parent,'Alpha static trace log (no Lua executed)',files['alpha-trace.txt'],true);
 }
 function render(data) {
   results.replaceChildren();
@@ -134,10 +134,26 @@ button.addEventListener('click', async () => {
   finally { button.disabled=false; }
 });
 updateButton.addEventListener('click', async () => {
-  updateButton.disabled=true; updateStatus.textContent=' Checking GitHub…';
-  try { const response=await fetch('/api/update'); const data=await response.json(); if(data.error) throw new Error(data.error); updateStatus.textContent=data.update_available ? ` Update available: ${data.latest_version}` : ` Up to date (${data.current_version})`; }
+  updateButton.disabled=true; installButton.hidden=true; updateStatus.textContent=' Checking GitHub…';
+  try {
+    const response=await fetch('/api/update'); const data=await response.json(); if(data.error) throw new Error(data.error);
+    if(data.update_available) {
+      updateStatus.textContent=` Update available: ${data.latest_version}. ${data.install_hint || ''}`;
+      installButton.hidden=!data.install_available;
+      installButton.title=data.install_hint || 'Run the installed MoonWAD updater';
+    } else updateStatus.textContent=` Up to date (${data.current_version})`;
+  }
   catch(error) { updateStatus.textContent=` Update check failed: ${error.message || String(error)}`; }
   finally { updateButton.disabled=false; }
+});
+installButton.addEventListener('click', async () => {
+  installButton.disabled=true; updateStatus.textContent=' Starting the installed updater…';
+  try {
+    const response=await fetch('/api/update/install',{method:'POST'}); const data=await response.json(); if(!response.ok || !data.started) throw new Error(data.message || 'Could not start update');
+    updateStatus.textContent=` ${data.message || 'Updater started.'}`;
+  }
+  catch(error) { updateStatus.textContent=` Update did not start: ${error.message || String(error)}`; }
+  finally { installButton.disabled=false; }
 });
 </script>
 </body>
@@ -225,7 +241,7 @@ def analyze_web_payload(payload: dict[str, Any], out_dir: Path, store: ResultSto
 
 
 class MoonWADWebHandler(BaseHTTPRequestHandler):
-    server_version = "MoonWADLocal/0.6.2"
+    server_version = "MoonWADLocal/0.7.0"
 
     def __init__(self, *args: Any, out_dir: Path, store: ResultStore, **kwargs: Any) -> None:
         self.out_dir = out_dir
@@ -267,6 +283,10 @@ class MoonWADWebHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = unquote(urlsplit(self.path).path)
+        if path == "/api/update/install":
+            status = launch_installed_updater()
+            self._send_json(HTTPStatus.ACCEPTED if status.get("started") else HTTPStatus.BAD_REQUEST, status)
+            return
         if path != "/api/analyze":
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
             return

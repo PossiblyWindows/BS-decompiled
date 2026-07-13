@@ -382,15 +382,36 @@ def unpack_wearedevs_v1(source: str) -> tuple[str, PassResult]:
             continue
 
         shuffled = list(raw_values)
-        ranges = _wad_shuffle_ranges(source, accessor.end(), mapping_start, len(shuffled))
+        # WAD v1 has two equivalent layouts in the wild: older output puts
+        # the deterministic ``ipairs`` shuffle *after* the lookup helper,
+        # while newer output shuffles the table immediately after declaring
+        # it and declares the helper afterwards.  Start at the table end so
+        # both layouts are recovered without evaluating the target program.
+        ranges = _wad_shuffle_ranges(source, table_closing + 1, mapping_start, len(shuffled))
         if not ranges:
             continue
+        # Whether the source leaves the deterministic shuffle in place depends
+        # on the emitter layout.  In the newer layout it appears before the
+        # accessor and therefore survives the later bootstrap removal; in the
+        # older layout it appears after the accessor and is removed together
+        # with the custom decoder.  Keep the recovered Lua semantically
+        # consistent in both cases instead of accidentally shuffling an
+        # already-shuffled static table a second time.
+        shuffle_match = re.search(r"\bipairs\s*\(\s*\{", source[table_closing + 1:mapping_start])
+        shuffle_before_accessor = bool(
+            shuffle_match
+            and table_closing + 1 + shuffle_match.start() < accessor.start()
+        )
         for left, right in ranges:
             shuffled[left - 1:right] = reversed(shuffled[left - 1:right])
         decoded = [_wad_b64_decode(value, mapping) for value in shuffled]
         if any(value is None for value in decoded):
             continue
         decoded_values = [value for value in decoded if value is not None]
+        decoded_raw = [_wad_b64_decode(value, mapping) for value in raw_values]
+        if any(value is None for value in decoded_raw):
+            continue
+        decoded_raw_values = [value for value in decoded_raw if value is not None]
 
         # A WAD v1 wrapper hands off to its flattened body with a
         # ``return(function(...`` after the shuffle and custom-base64 loop.
@@ -403,7 +424,11 @@ def unpack_wearedevs_v1(source: str) -> tuple[str, PassResult]:
         if entry is None or entry.start() - accessor.end() > 500_000:
             continue
 
-        decoded_body = ",\n    ".join(_lua_quote_wad_bytes(value) for value in decoded_values)
+        # If the shuffle is still in the source, emit the values in their
+        # original order and let that retained deterministic loop perform the
+        # same reordering once.  Otherwise emit the already-replayed order.
+        table_values = decoded_raw_values if shuffle_before_accessor else decoded_values
+        decoded_body = ",\n    ".join(_lua_quote_wad_bytes(value) for value in table_values)
         decoded_table = f"\nlocal {table_match.group('name')} = {{\n    {decoded_body}\n}}"
         source = replace_ranges(source, [(table_match.start(), table_closing + 1, decoded_table)])
 
@@ -454,6 +479,8 @@ def unpack_wearedevs_v1(source: str) -> tuple[str, PassResult]:
             f"replayed {len(ranges)} deterministic table shuffle range(s)",
             "rewrote the table with recovered literals and removed its deterministic bootstrap",
         ]
+        if shuffle_before_accessor:
+            notes.append("preserved the pre-accessor table shuffle so the recovered Lua does not shuffle twice")
         return source, PassResult("unpack_wearedevs_v1", replacements, notes)
     return source, PassResult("unpack_wearedevs_v1", 0)
 

@@ -24,7 +24,7 @@ from .passes import (
     normalize,
 )
 from .report import text_report
-from .updates import check_for_update, update_status_text
+from .updates import check_for_update, launch_installed_updater, update_status_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -52,7 +52,7 @@ def analyze_text(text: str, name: str, alpha: bool = False) -> AnalysisResult:
         alpha_trace = trace_literal_output(normalized)
         metadata["alpha_trace"] = alpha_trace
         if not alpha_trace.get("accepted"):
-            warnings.append("Alpha literal trace refused this source; alpha mode never executes Lua/Luau or loaders.")
+            warnings.append("Alpha static output trace did not accept the complete source; read alpha-trace.txt for its exact log. Alpha mode never executes Lua/Luau or loaders.")
     if len(text) > 5_000_000:
         warnings.append("Large source: some table extraction limits may truncate previews.")
     return AnalysisResult(
@@ -159,11 +159,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional pinned reference engine (MoonSec reference output is bytecode or disassembly, not invented Lua)",
     )
     parser.add_argument("--version", action="version", version=f"MoonWAD {__version__}")
-    parser.add_argument("--check-update", action="store_true", help="check the fixed MoonWAD GitHub branch for a newer version; never installs anything")
+    parser.add_argument("--check-update", action="store_true", help="check the fixed MoonWAD GitHub branch for a newer version")
+    parser.add_argument(
+        "--install-update",
+        action="store_true",
+        help="explicitly launch the fixed updater from a Windows or Termux MoonWAD installation",
+    )
     parser.add_argument(
         "--alpha",
         action="store_true",
-        help="write a literal-only alpha output trace; it refuses and never executes non-literal Lua/Luau",
+        help="write a static literal-output trace and verbose log; it never executes Lua/Luau",
     )
     parser.add_argument("-web", "--web", action="store_true", help="start the local browser UI (127.0.0.1 only)")
     parser.add_argument("--web-port", type=int, default=8765, help="local browser UI port; use 0 for an available port")
@@ -178,20 +183,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.check_update:
-        if args.input or args.web or args.engine != "builtin":
+        if args.input or args.web or args.engine != "builtin" or args.install_update:
             parser.error("--check-update is used on its own")
         status = check_for_update()
         print(update_status_text(status))
         return 1 if status.get("error") else 0
+    if args.install_update:
+        if args.input or args.web or args.engine != "builtin" or args.alpha:
+            parser.error("--install-update is used on its own")
+        status = launch_installed_updater()
+        print(str(status.get("message", "Updater status unavailable.")))
+        return 0 if status.get("started") else 1
     if args.alpha and args.engine != "builtin":
-        parser.error("--alpha only supports MoonWAD's built-in literal-only trace")
+        parser.error("--alpha only supports MoonWAD's built-in static output trace")
     if args.web:
         if args.input:
             parser.error("--web starts the local UI; submit the file through that UI instead")
         if not 0 <= args.web_port <= 65535:
             parser.error("--web-port must be between 0 and 65535")
         if args.alpha:
-            parser.error("choose Alpha literal trace in the web page after starting --web")
+            parser.error("choose Alpha static output trace in the web page after starting --web")
         from .web import serve_web
 
         out_dir = Path(args.out_dir).expanduser().resolve()

@@ -6,13 +6,18 @@ PREFIX_DIR="${PREFIX:-/data/data/com.termux/files/usr}"
 BIN_DIR="$PREFIX_DIR/bin"
 INSTALL_DIR="$HOME/.local/share/moonwad"
 
-echo "[1/4] Installing base packages..."
+echo "MoonWAD Termux installer"
+echo "Source folder: $ROOT"
+echo "Application folder: $INSTALL_DIR"
+echo "Command folder: $BIN_DIR"
+echo
+echo "[1/5] Installing base packages..."
 pkg update -y
 pkg install -y python git ca-certificates
 
 mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 
-echo "[2/4] Installing MoonWAD..."
+echo "[2/5] Copying MoonWAD application files..."
 rm -rf "$INSTALL_DIR/moonwad"
 cp -R "$ROOT/moonwad" "$INSTALL_DIR/moonwad"
 cp "$ROOT/run.py" "$INSTALL_DIR/run.py"
@@ -20,6 +25,7 @@ rm -rf "$INSTALL_DIR/scripts"
 cp -R "$ROOT/scripts" "$INSTALL_DIR/scripts"
 cp "$ROOT/README.md" "$INSTALL_DIR/README.md"
 
+echo "[3/5] Writing moonwad and moonwad-update commands..."
 cat > "$BIN_DIR/moonwad" <<EOF
 #!$PREFIX_DIR/bin/sh
 exec $PREFIX_DIR/bin/python "$INSTALL_DIR/run.py" "\$@"
@@ -32,10 +38,11 @@ exec $PREFIX_DIR/bin/bash "$INSTALL_DIR/scripts/install-from-github.sh" "https:/
 EOF
 chmod +x "$BIN_DIR/moonwad-update"
 
-echo "[3/4] Running self-test..."
+echo "[4/5] Running self-test (no Lua/Luau is executed)..."
 PYTHONPATH="$INSTALL_DIR" "$PREFIX_DIR/bin/python" -m unittest discover -s "$ROOT/tests" -p 'test_*.py'
+PYTHONPATH="$INSTALL_DIR" "$PREFIX_DIR/bin/python" "$INSTALL_DIR/run.py" --version
 
-echo "[4/4] Done."
+echo "[5/5] Done."
 echo "Run: moonwad --help"
 echo "Interactive mode: moonwad"
 echo "Update from GitHub: moonwad-update"

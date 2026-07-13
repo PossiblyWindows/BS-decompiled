@@ -81,6 +81,29 @@ class MoonWADTests(unittest.TestCase):
         self.assertNotIn("SGVsbG8=", output)
         self.assertIn("WAD string-table bootstrap removed", output)
 
+    def test_wad_v1_pre_accessor_shuffle_is_unpacked(self) -> None:
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        alphabet_map = ",".join(f'["{character}"]={index}' for index, character in enumerate(alphabet))
+        source = "\n".join(
+            [
+                "--[[ v1.0.0 https://wearedevs.net/obfuscator ]]",
+                "return(function(...) local l={\"d29ybGQ=\",\"SGVsbG8=\",\"QQ==\",\"Qg==\",\"Qw==\",\"RA==\",\"RQ==\",\"Rg==\"}",
+                "for r,t in ipairs({{1;2}})do while t[1]<t[2]do l[t[1]],l[t[2]],t[1],t[2]=l[t[2]],l[t[1]],t[1]+1,t[2]-1 end end",
+                "local function r(r)return l[r+1]end",
+                f"do local d={{{alphabet_map}}} end",
+                "return(function() return r(0)..r(1) end)() end)(...)",
+            ]
+        )
+        output, passes, _ = normalize(source)
+        wad_pass = next(item for item in passes if item.name == "unpack_wearedevs_v1")
+        self.assertEqual(wad_pass.replacements, 2)
+        self.assertIn('\"Helloworld\"', output)
+        # This layout leaves the deterministic shuffle in the recovered Lua.
+        # The static table therefore remains in its pre-shuffle order so it is
+        # not shuffled twice if someone reviews it in a Lua parser/runtime.
+        self.assertIn('"world",\n    "Hello"', output)
+        self.assertIn("preserved the pre-accessor table shuffle", " ".join(wad_pass.notes))
+
     def test_numeric_parentheses_are_folded(self) -> None:
         output, _, _ = normalize("local value=-1006551-(-1007150)")
         self.assertIn("value=599", output)
@@ -121,6 +144,25 @@ class MoonWADTests(unittest.TestCase):
         self.assertFalse(rejected["accepted"])
         self.assertIn("non-literal", " ".join(rejected["refusals"]))
         self.assertIn("no Lua runtime", alpha_trace_text(trace))
+
+    def test_alpha_trace_reports_wad_vm_and_keeps_partial_candidates(self) -> None:
+        direct = trace_literal_output('print("hell0o")')
+        self.assertTrue(direct["accepted"])
+        self.assertEqual(direct["outputs"], [{"kind": "print", "text": "hell0o"}])
+        self.assertIn("Trace log", alpha_trace_text(direct))
+
+        partial = trace_literal_output('print("shown")\nlocal hidden = 1')
+        self.assertFalse(partial["accepted"])
+        self.assertEqual(partial["outputs"], [{"kind": "print", "text": "shown"}])
+        self.assertIn("static candidate", " ".join(partial["refusals"]))
+
+        wad_vm = trace_literal_output(
+            "--[[ v1.0.0 https://wearedevs.net/obfuscator ]]\n"
+            "while state do if state<1 then state=2 elseif state<3 then state=4 elseif state<5 then state=6 end end"
+        )
+        self.assertFalse(wad_vm["accepted"])
+        self.assertIn("flattened VM", " ".join(wad_vm["refusals"]))
+        self.assertIn("Detected a WeAreDevs/WAD wrapper marker.", wad_vm["logs"])
 
     def test_alpha_trace_output_files(self) -> None:
         result = analyze_text('print("hello world")', "alpha.lua", alpha=True)
@@ -206,7 +248,18 @@ class MoonWADTests(unittest.TestCase):
     def test_web_alpha_trace_and_update_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch(
             "moonwad.web.check_for_update",
-            return_value={"current_version": "0.6.0", "latest_version": "0.6.0", "update_available": False, "project_url": "https://example.invalid", "error": None},
+            return_value={
+                "current_version": "0.6.0",
+                "latest_version": "0.6.0",
+                "update_available": False,
+                "install_available": False,
+                "install_hint": "not installed",
+                "project_url": "https://example.invalid",
+                "error": None,
+            },
+        ), patch(
+            "moonwad.web.launch_installed_updater",
+            return_value={"started": True, "pid": 123, "message": "Updater launched"},
         ):
             server = make_web_server(Path(tmp), port=0)
             worker = threading.Thread(target=server.serve_forever, daemon=True)
@@ -215,6 +268,10 @@ class MoonWADTests(unittest.TestCase):
             try:
                 update = json.loads(urlopen(f"{base}/api/update").read())
                 self.assertEqual(update["latest_version"], "0.6.0")
+                updater = Request(f"{base}/api/update/install", data=b"", method="POST")
+                update_start = json.loads(urlopen(updater).read())
+                self.assertTrue(update_start["started"])
+                self.assertEqual(update_start["message"], "Updater launched")
                 request = Request(
                     f"{base}/api/analyze",
                     data=json.dumps({"name": "alpha.lua", "text": 'print("hello")', "alpha": True}).encode(),
@@ -241,6 +298,11 @@ class MoonWADTests(unittest.TestCase):
             return_value={"current_version": "0.6.0", "latest_version": "0.6.0", "update_available": False, "project_url": "https://example.invalid", "error": None},
         ):
             self.assertEqual(main(["--check-update"]), 0)
+        with patch(
+            "moonwad.cli.launch_installed_updater",
+            return_value={"started": True, "message": "Updater launched"},
+        ):
+            self.assertEqual(main(["--install-update"]), 0)
 
 
 if __name__ == "__main__":
